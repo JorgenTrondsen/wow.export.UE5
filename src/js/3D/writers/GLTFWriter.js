@@ -64,6 +64,20 @@ function vec3_to_mat4x4(v) {
 	];
 }
 
+/**
+ * Transform translation values to be relative to parent bone
+ * @param {Array} values Translation values array
+ * @param {Array} pivot Current bone's pivot point
+ * @param {Array} parentPivot Parent bone's pivot point
+ * @returns {Array} Transformed translation values
+ */
+function transformTranslations(values, pivot, parentPivot) {
+    return values.map(vec => {
+        // Convert from pivot-relative to parent-relative space
+        return vec.map((v, i) => v + (pivot[i] - parentPivot[i]));
+    });
+}
+
 class GLTFWriter {
 	/**
 	 * Construct a new GLTF writer instance.
@@ -314,6 +328,30 @@ class GLTFWriter {
 				children: []
 			});
 
+			let mainBone = null;
+			if (BoneMapper.get_bone_name(bones[0].boneID, 0, bones[0].boneNameCRC) !== "bone_Main") {
+				mainBone = {
+					name: "bone_Main",
+					translation: [0, 0, 0],
+					children: []
+				};
+
+				// Create a main bone that all other bones will connect to
+				const mainBoneNodeIndex = nodes.length;
+				nodes.push(mainBone);
+				skeleton.children.push(mainBoneNodeIndex);
+
+				// Add the main bone to the skin joints and inverse bind matrices
+				skin.joints.unshift(mainBoneNodeIndex);
+				this.inverseBindMatrices.unshift(...vec3_to_mat4x4([0, 0, 0]));
+
+				for (let i = 0; i < this.boneIndices.length; i++) {
+					if (this.boneWeights[i] !== 0) {
+						this.boneIndices[i] += 1;
+					}
+				}
+			}
+
 			const bone_lookup_map = new Map();
 
 			const animation_buffer_lookup_map = new Map();
@@ -407,27 +445,28 @@ class GLTFWriter {
 					const parent_node = bone_lookup_map.get(bone.parentBone);
 					parent_node.children ? parent_node.children.push(nodeIndex) : parent_node.children = [nodeIndex];
 				} else {
-					// Parent stray bones to the skeleton root.
-					skeleton.children.push(nodeIndex);
+					// Parent stray bones to our new main bone instead of skeleton
+					if (mainBone) {	
+						mainBone.children.push(nodeIndex);
+					}
+					else {
+						skeleton.children.push(nodeIndex);
+					}
 				}
 
 				const bone_name = BoneMapper.get_bone_name(bone.boneID, bi, bone.boneNameCRC);
-				const prefix_node = {
-					name: bone_name + '_p',
-					translation: bone.pivot.map((v, i) => v - parent_pos[i]),
-					children: [nodeIndex + 1]
+				// Create single bone node with initial transform
+				const node = {
+					name: bone_name,
+					translation: bone.pivot.map((v, i) => v - parent_pos[i])
 				};
 	
-				const node = { name: bone_name };
-	
 				bone_lookup_map.set(bi, node);
-	
-				nodes.push(prefix_node);
 				nodes.push(node);
 	
 				this.inverseBindMatrices.push(...vec3_to_mat4x4(bone.pivot));
-	
-				skin.joints.push(nodeIndex + 1);
+
+				skin.joints.push(nodeIndex);
 				
 				// Skip rest of the bone logic if we're not exporting animations.
 				if (!core.view.config.modelsExportAnimations)
@@ -444,6 +483,18 @@ class GLTFWriter {
 					if (bone.translation.values.length != 0 && bone.translation.values.length != this.animations.length) {
 						log.write("values array length (" + bone.translation.timestamps.length + ") does not match the amount of animations (" + this.animations.length + "), skipping bone " + bi);
 						continue;
+					}
+
+					// Transform translation values of animation data before writing.
+					for (let i = 0; i < bone.translation.values.length; i++) {
+						if (bone.translation.values[i].length === 0)
+							continue;
+							
+						bone.translation.values[i] = transformTranslations(
+							bone.translation.values[i],
+							bone.pivot,
+							parent_pos
+						);
 					}
 
 					// TIMESTAMPS
@@ -556,7 +607,7 @@ class GLTFWriter {
 							{	
 								"sampler": root.animations[i].samplers.length - 1, 
 								"target": {
-									"node": nodeIndex + 1,
+									"node": nodeIndex, 
 									"path": "translation"
 								}
 							}
@@ -685,7 +736,7 @@ class GLTFWriter {
 							{	
 								"sampler": root.animations[i].samplers.length - 1, 
 								"target": {
-									"node": nodeIndex + 1,
+									"node": nodeIndex, 
 									"path": "rotation"
 								}
 							}
@@ -806,7 +857,7 @@ class GLTFWriter {
 							{	
 								"sampler": root.animations[i].samplers.length - 1, 
 								"target": {
-									"node": nodeIndex + 1,
+									"node": nodeIndex, 
 									"path": "scale"
 								}
 							}
