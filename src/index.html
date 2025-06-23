@@ -424,12 +424,20 @@
 							<input type="button" :value="mapViewerSelection.length > 0 ? ('Export ' + mapViewerSelection.length + ' Tiles') : 'Export Tiles'" @click="click('export-map', $event)" :class="{ disabled: isBusy}"/>
 						</div>
 
-						<div id="maps-sidebar" class="sidebar">
-							<span class="header">Export Options</span>
+						<div id="maps-sidebar" class="sidebar">							<span class="header">Export Options</span>
 							<label class="ui-checkbox" title="Export raw files">
 								<input type="checkbox" v-model="config.mapsExportRaw"/>
 								<span>Export Raw</span>
-							</label>
+							</label>							<template v-if="!config.mapsExportRaw">
+								<label class="ui-checkbox" title="Export OBJ models for terrain">
+									<input type="checkbox" v-model="config.mapsExportOBJ" :disabled="!config.mapsExportHeightmap && config.mapsExportOBJ"/>
+									<span>Export OBJ</span>
+								</label>
+								<label class="ui-checkbox" title="Export R16 heightmaps for terrain">
+									<input type="checkbox" v-model="config.mapsExportHeightmap" :disabled="!config.mapsExportOBJ && config.mapsExportHeightmap"/>
+									<span>Export Heightmap</span>
+								</label>
+							</template>
 							<label class="ui-checkbox" title="Include WMO objects (large objects such as buildings)">
 								<input type="checkbox" v-model="config.mapsIncludeWMO"/>
 								<span>Export WMO</span>

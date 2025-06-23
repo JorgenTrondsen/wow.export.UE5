@@ -198,20 +198,26 @@ class ADTExporter {
 		this.tileID = this.tileY + '_' + this.tileX;
 		this.tileIndex = tileIndex;
 	}
-
 	/**
 	 * Export the ADT tile.
 	 * @param {string} dir Directory to export the tile into.
 	 * @param {number} textureRes
 	 * @param {Set|undefined} gameObjects Additional game objects to export.
 	 * @param {ExportHelper} helper
+	 * @param {R16Writer|null} r16Writer Optional R16Writer instance for heightmap export.
 	 * @returns {string}
 	 */
-	async export(dir, quality, gameObjects, helper) {
+	async export(dir, quality, gameObjects, helper, r16Writer = null) {
 		const casc = core.view.casc;
 		const config = core.view.config;
-
-		const out = { type: config.mapsExportRaw ? 'ADT_RAW' : 'ADT_OBJ', path: '' };
+		let outputType = 'ADT_OBJ';
+		if (config.mapsExportRaw) {
+			outputType = 'ADT_RAW';
+		} else if (config.mapsExportHeightmap) {
+			outputType = 'ADT_HEIGHTMAP';
+		}
+		
+		const out = { type: outputType, path: '' };
 
 		const usePosix = config.pathFormat === 'posix';
 		const prefix = util.format('world/maps/%s/%s', this.mapDir, this.mapDir);
@@ -318,10 +324,21 @@ class ADTExporter {
 			const chunkMeshes = new Array(256);
 
 			const objOut = path.join(dir, 'adt_' + this.tileID + '.obj');
-			out.path = objOut;
+			
+			// Set appropriate output path based on export type
+			if (config.mapsExportHeightmap) {
+				out.path = path.join(dir, 'heightmap_' + this.tileID + '.r16');
+			} else {
+				out.path = objOut;
+			}
 
-			const obj = new OBJWriter(objOut);
-			const mtl = new MTLWriter(path.join(dir, 'adt_' + this.tileID + '.mtl'));
+			let obj, mtl;
+			
+			// Only create OBJ/MTL writers if we're exporting OBJ format
+			if (config.mapsExportOBJ) {
+				obj = new OBJWriter(objOut);
+				mtl = new MTLWriter(path.join(dir, 'adt_' + this.tileID + '.mtl'));
+			}
 
 			const firstChunk = rootAdt.chunks[0];
 			const firstChunkX = firstChunk.position[0];
@@ -440,15 +457,17 @@ class ADTExporter {
 							j += 9;
 					}
 				
-					ofs = midX;
-
-					if (isSplittingTextures || isSplittingAlphaMaps) {
-						const objName = this.tileID + '_' + chunkID;
-						const matName = 'tex_' + objName;
-						mtl.addMaterial(matName, matName + '.png');
-						obj.addMesh(objName, indices, matName);
-					} else {
-						obj.addMesh(chunkID, indices, 'tex_' + this.tileID);
+					ofs = midX;					
+					
+					if (config.mapsExportOBJ) {
+						if (isSplittingTextures || isSplittingAlphaMaps) {
+							const objName = this.tileID + '_' + chunkID;
+							const matName = 'tex_' + objName;
+							mtl.addMaterial(matName, matName + '.png');
+							obj.addMesh(objName, indices, matName);
+						} else {
+							obj.addMesh(chunkID, indices, 'tex_' + this.tileID);
+						}
 					}
 					chunkMeshes[chunkIndex] = indices;
 
@@ -456,18 +475,28 @@ class ADTExporter {
 				}
 			}
 
-			if ((!isAlphaMaps && !isSplittingTextures) || (isAlphaMaps && !isSplittingAlphaMaps))
-				mtl.addMaterial('tex_' + this.tileID, 'tex_' + this.tileID + '.png');
-
-			obj.setVertArray(vertices);
-			obj.setNormalArray(normals);
-			obj.addUVArray(uvs);
-
-			if (!mtl.isEmpty)
-				obj.setMaterialLibrary(path.basename(mtl.out));
+			if (config.mapsExportOBJ) {
+				if ((!isAlphaMaps && !isSplittingTextures) || (isAlphaMaps && !isSplittingAlphaMaps))
+					mtl.addMaterial('tex_' + this.tileID, 'tex_' + this.tileID + '.png');
 			
-			await obj.write(config.overwriteFiles);
-			await mtl.write(config.overwriteFiles);
+				obj.setVertArray(vertices);
+				obj.setNormalArray(normals);
+				obj.addUVArray(uvs);
+
+				if (!mtl.isEmpty)
+					obj.setMaterialLibrary(path.basename(mtl.out));
+			}
+
+			// Export heightmap if R16Writer is provided
+			if (config.mapsExportHeightmap) {
+				r16Writer.setHeightDataFromChunks(rootAdt.chunks);
+				r16Writer.out = path.join(dir, 'heightmap_' + this.tileID + '.r16');
+			}
+			
+			if (config.mapsExportOBJ) {
+				await obj.write(config.overwriteFiles);
+				await mtl.write(config.overwriteFiles);
+			}
 
 			if (quality !== 0) {
 				if (isAlphaMaps) {

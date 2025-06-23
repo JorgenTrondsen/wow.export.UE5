@@ -16,6 +16,8 @@ const WDTLoader = require('../3D/loaders/WDTLoader');
 const ADTExporter = require('../3D/exporters/ADTExporter');
 const ExportHelper = require('../casc/export-helper');
 const WMOExporter = require('../3D/exporters/WMOExporter');
+const R16Writer = require('../3D/writers/R16Writer');
+const FileWriter = require('../file-writer');
 
 let selectedMapID;
 let selectedMapDir;
@@ -214,7 +216,6 @@ const exportSelectedMap = async () => {
 	// User has not selected any tiles.
 	if (exportTiles.length === 0)
 		return core.setToast('error', 'You haven\'t selected any tiles; hold shift and click on a map tile to select it.', null, -1);
-
 	const helper = new ExportHelper(exportTiles.length, 'tile');
 	helper.start();
 
@@ -227,10 +228,23 @@ const exportSelectedMap = async () => {
 	// when the path is trimmed, users end up in the right place. Bit hack-y, but quicker.
 	const markPath = path.join('maps', selectedMapDir, selectedMapDir);
 
-	for (const index of exportTiles) {
+	// Store R16Writers and ADT exports for the second pass
+	const r16Writers = [];
+	const adtExports = [];
+	
+	// First pass: Export ADTs and collect height data to find global min/max
+	let globalMinHeight = Number.POSITIVE_INFINITY;
+	let globalMaxHeight = Number.NEGATIVE_INFINITY;
+
+	for (let i = 0; i < exportTiles.length; i++) {
+		const index = exportTiles[i];
+		
 		// Abort if the export has been cancelled.
 		if (helper.isCancelled())
 			break;
+
+		helper.setCurrentTaskName(`Pass 1: Tile ${Math.floor(index / 64)}_${index % 64} (${i + 1}/${exportTiles.length})`);
+		helper.setCurrentTaskValue(i);
 
 		const adt = new ADTExporter(selectedMapID, selectedMapDir, index);
 
@@ -246,15 +260,84 @@ const exportSelectedMap = async () => {
 				const [posX, posY] = obj.Pos;
 				return posX > startX && posX < endX && posY > startY && posY < endY;
 			});
-		}
+		}		
 
 		try {
-			const out = await adt.export(dir, exportQuality, gameObjects, helper);
-			await exportPaths?.writeLine(out.type + ':' + out.path);
+			const r16Writer = core.view.config.mapsExportHeightmap ? new R16Writer() : null;
+			const out = await adt.export(dir, exportQuality, gameObjects, helper, r16Writer);
+			
+			// Always track successful exports
+			adtExports.push({ out, index: i });
+			
+			// Store R16Writer for second pass if heightmap export is enabled
+			if (r16Writer) {
+				r16Writers.push(r16Writer);
+				
+				// Get min/max heights from this tile and update global values
+				const { minHeight: min, maxHeight: max } = r16Writer;
+				if (min < globalMinHeight) globalMinHeight = min;
+				if (max > globalMaxHeight) globalMaxHeight = max;
+			}
+
+			// Mark as successful in first pass (will handle both OBJ and heightmap cases)
 			helper.mark(markPath, true);
+			
 		} catch (e) {
 			helper.mark(markPath, false, e.message, e.stack);
 		}
+	}	
+	// Second pass: Set global min/max for all R16Writers and write files
+	if (r16Writers.length > 0) {
+		for (let i = 0; i < r16Writers.length; i++) {
+			// Abort if the export has been cancelled.
+			if (helper.isCancelled())
+				break;
+
+			const r16Writer = r16Writers[i];
+			
+			helper.setCurrentTaskName(`Pass 2: Writing R16 heightmap ${i + 1}/${r16Writers.length}`);
+			helper.setCurrentTaskValue(exportTiles.length + i);			
+
+			try {
+				// Set global min/max heights for uniform normalization
+				r16Writer.minHeight = globalMinHeight;
+				r16Writer.maxHeight = globalMaxHeight;
+				
+				// Write the R16 file
+				await r16Writer.write();			
+
+			} catch (e) {
+				helper.mark(markPath, false, e.message, e.stack);
+			}
+		}
+		
+		// Write metadata file with global height range
+		try {
+			const metadataPath = path.join(dir, 'heightmap_metadata.json');
+			const metadataWriter = new FileWriter(metadataPath);
+			
+			const metadata = {
+				export: {
+					tile_count: r16Writers.length
+				},
+				height_range: {
+					min_height: globalMinHeight,
+					max_height: globalMaxHeight,
+					range: globalMaxHeight - globalMinHeight
+				}
+			};
+			
+			await metadataWriter.writeLine(JSON.stringify(metadata, null, 2));
+			metadataWriter.close();
+
+		} catch (e) {
+			helper.mark('heightmap metadata', false, e.message, e.stack);
+		}
+	}
+
+	// Write export paths for all successful exports
+	for (const adtExport of adtExports) {
+		await exportPaths?.writeLine(adtExport.out.type + ':' + adtExport.out.path);
 	}
 
 	exportPaths?.close();
