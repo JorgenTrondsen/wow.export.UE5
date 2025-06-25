@@ -64,20 +64,6 @@ function vec3_to_mat4x4(v) {
 	];
 }
 
-/**
- * Transform translation values to be relative to parent bone
- * @param {Array} values Translation values array
- * @param {Array} pivot Current bone's pivot point
- * @param {Array} parentPivot Parent bone's pivot point
- * @returns {Array} Transformed translation values
- */
-function transformTranslations(values, pivot, parentPivot) {
-    return values.map(vec => {
-        // Convert from pivot-relative to parent-relative space
-        return vec.map((v, i) => v + (pivot[i] - parentPivot[i]));
-    });
-}
-
 class GLTFWriter {
 	/**
 	 * Construct a new GLTF writer instance.
@@ -172,11 +158,33 @@ class GLTFWriter {
 	 * @param {string} matName 
 	 */
 	addMesh(name, triangles, matName) {
-		this.meshes.push({ name, triangles, matName });
+        this.meshes.push({ name, triangles, matName });
+    }
+
+	
+	/**
+	 * Calculates a timestamp scale factor for animation timing adjustments.
+	 * 
+	 * This method computes a scale factor based on the animation duration converted
+	 * to a frame-based representation (assuming ~60 FPS with ~16.666ms per frame).
+	 * If the rounded duration is less than the calculated output duration, it returns
+	 * a scaling factor to adjust timing; otherwise, it returns 1 (no scaling).
+	 * 
+	 * @param {number} animIdx - The index of the animation in the animations array
+	 * @returns {number} The timestamp scale factor (between 0 and 1, or exactly 1)
+	 */
+	timestampScalefactor(animIdx){
+		const outputDuration = this.animations[animIdx].duration / (1000 / 60);		// Convert milliseconds to frames (assuming 60 FPS)
+		const roundedDuration = Math.round(outputDuration);
+
+		if (roundedDuration < outputDuration) {
+			return roundedDuration / outputDuration;
+		}
+		return 1;
 	}
 
-	async write(overwrite = true) {
-		const outGLTF = ExportHelper.replaceExtension(this.out, '.gltf');
+    async write(overwrite = true) {
+        const outGLTF = ExportHelper.replaceExtension(this.out, '.gltf');
 		const outBIN = ExportHelper.replaceExtension(this.out, '.bin');
 
 		const out_dir = path.dirname(outGLTF);
@@ -354,7 +362,7 @@ class GLTFWriter {
 
 			const bone_lookup_map = new Map();
 
-			const animation_buffer_lookup_map = new Map();
+            const animation_buffer_lookup_map = new Map();
 
 			if (core.view.config.modelsExportAnimations) {
 				for (var animationIndex = 0; animationIndex < this.animations.length; animationIndex++) {
@@ -429,12 +437,12 @@ class GLTFWriter {
 							"name" : AnimMapper.get_anim_name(animation.id) + " (ID " + animation.id + " variation " + animation.variationIndex + ")"
 						}
 					);
-				}
+                }
 			}
 			
 			// Add bone nodes.
-			for (let bi = 0; bi < bones.length; bi++) {
-				const nodeIndex = nodes.length;
+            for (let bi = 0; bi < bones.length; bi++) {
+                const nodeIndex = nodes.length;
 				const bone = bones[bi];
 	
 				let parent_pos = [0, 0, 0];
@@ -482,7 +490,7 @@ class GLTFWriter {
 
 					if (bone.translation.values.length != 0 && bone.translation.values.length != this.animations.length) {
 						log.write("values array length (" + bone.translation.timestamps.length + ") does not match the amount of animations (" + this.animations.length + "), skipping bone " + bi);
-						continue;
+						continue;					
 					}
 
 					// Transform translation values of animation data before writing.
@@ -490,18 +498,18 @@ class GLTFWriter {
 						if (bone.translation.values[i].length === 0)
 							continue;
 							
-						bone.translation.values[i] = transformTranslations(
-							bone.translation.values[i],
-							bone.pivot,
-							parent_pos
-						);
+						bone.translation.values[i] = bone.translation.values[i].map(vec => {
+							// Convert from pivot-relative to parent-relative space
+							return vec.map((v, j) => v + (bone.pivot[j] - parent_pos[j]));
+						});
 					}
 
 					// TIMESTAMPS
 					for (let i = 0; i < bone.translation.timestamps.length; i++) {
 						if (bone.translation.timestamps[i].length == 0)
 							continue;
-					
+
+						const scaleFactor = this.timestampScalefactor(i);
 						const animName = this.animations[i].id + "-" + this.animations[i].variationIndex;
 						const animationBuffer = animationBufferMap.get(animName);
 
@@ -527,9 +535,9 @@ class GLTFWriter {
 
 						for (let j = 0; j < bone.translation.timestamps[i].length; j++) {
 							// TODO: We need to recalculate these properly.
-							const time = bone.translation.timestamps[i][j] / 1000;
+							const time = (bone.translation.timestamps[i][j] * scaleFactor) / 1000;
 							animationBuffer.writeFloatLE(time);
-
+							
 							if (time < timeMin)
 								timeMin = time;
 
@@ -617,13 +625,14 @@ class GLTFWriter {
 					log.write("Bone " + bi + " has unsupported interpolation type for translation, skipping.");
 				}
 				
-				if (bone.rotation.interpolation < 2) {
+				if (bone.rotation.interpolation < 2) {							
 					// TODO: We might be able to make this generic?
 					// ROTATION
 					for (let i = 0; i < bone.rotation.timestamps.length; i++) {
 						if (bone.rotation.timestamps[i].length == 0)
 							continue;
-					
+
+						const scaleFactor = this.timestampScalefactor(i);
 						const animName = this.animations[i].id + "-" + this.animations[i].variationIndex;
 						const animationBuffer = animationBufferMap.get(animName);
 
@@ -641,7 +650,7 @@ class GLTFWriter {
 								"interpolation": bone.rotation.interpolation == 0 ? "STEP" : "LINEAR",
 								"output": 0, // Values accessor index is set later
 							}
-						);
+						);						
 
 						// Write out bone timestamps to buffer.
 						let timeMin = 9999999;
@@ -649,9 +658,9 @@ class GLTFWriter {
 
 						for (let j = 0; j < bone.rotation.timestamps[i].length; j++) {
 							// TODO: We need to recalculate these properly.
-							const time = bone.rotation.timestamps[i][j] / 1000;
+							const time = (bone.rotation.timestamps[i][j] * scaleFactor) / 1000;
 							animationBuffer.writeFloatLE(time);
-
+							
 							if (time < timeMin)
 								timeMin = time;
 
@@ -744,14 +753,15 @@ class GLTFWriter {
 					}
 				} else { 
 					log.write("Bone " + bi + " has unsupported interpolation type for rotation, skipping.");
-				}
+				}				
 
-				if (bone.scale.interpolation < 2) {
+				if (bone.scale.interpolation < 2) {							
 					// SCALING
 					for (let i = 0; i < bone.scale.timestamps.length; i++) {
 						if (bone.scale.timestamps[i].length == 0)
 							continue;
-					
+
+						const scaleFactor = this.timestampScalefactor(i);
 						const animName = this.animations[i].id + "-" + this.animations[i].variationIndex;
 						const animationBuffer = animationBufferMap.get(animName);
 
@@ -769,7 +779,7 @@ class GLTFWriter {
 								"interpolation": bone.scale.interpolation == 0 ? "STEP" : "LINEAR",
 								"output": 0, // Values accessor index is set later
 							}
-						);
+						);						
 
 						// Write out bone timestamps to buffer.
 						let timeMin = 9999999;
@@ -777,9 +787,9 @@ class GLTFWriter {
 						
 						for (let j = 0; j < bone.scale.timestamps[i].length; j++) {
 							// TODO: We need to recalculate these properly.
-							const time = bone.scale.timestamps[i][j] / 1000;
+							const time = (bone.scale.timestamps[i][j] * scaleFactor) / 1000;
 							animationBuffer.writeFloatLE(time);
-
+							
 							if (time < timeMin)
 								timeMin = time;
 
