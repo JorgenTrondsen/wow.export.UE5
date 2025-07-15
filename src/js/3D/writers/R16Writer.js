@@ -3,20 +3,17 @@
 	Authors: Kruithne <kruithne@gmail.com>
 	License: MIT
  */
-const path = require('path');
-const fs = require('fs').promises;
-const generics = require('../../generics');
-const FileWriter = require('../../file-writer');
 
 class R16Writer {
 	/**
 	 * Construct a new R16Writer instance.
 	 */
 	constructor() {
-		this.out = null; // Output file path
+		this.column = 0;
+		this.row = 0; 
 		this.heightData = [];
-		this.minHeight = Number.POSITIVE_INFINITY;
-		this.maxHeight = Number.NEGATIVE_INFINITY;
+		this.minHeight = Infinity;
+		this.maxHeight = -Infinity;
 	}
 
 	/**
@@ -27,21 +24,21 @@ class R16Writer {
 	 */
 	setHeightDataFromChunks(chunks) {
 		// Create a heightmap that matches the OBJ vertex structure
-		// Each chunk contributes 16x16 quads (17x17 vertices) but we need to be selective
-		const tilesPerSide = 16; // 16x16 chunks per ADT
+		// Each tile contributes 16x16 chunks (17x17 vertices) but we need to be selective
+		const chunksPerSide = 16; // 16x16 chunks per ADT
 		
 		// Use the same vertex arrangement as the OBJ export
 		// We'll create a grid based on the actual vertex pattern from ADT chunks
 		const vertsPerChunk = 17; // 17x17 logical grid per chunk
-		const fullSize = tilesPerSide * (vertsPerChunk - 1) + 1; // 257x257
+		const fullSize = chunksPerSide * (vertsPerChunk - 1) + 1; // 257x257
 		
 		const heights = new Array(fullSize * fullSize).fill(0);
 		const heightSet = new Array(fullSize * fullSize).fill(false);
 
 		// Process each chunk and extract vertices in the same pattern as OBJ export
-		for (let chunkX = 0; chunkX < tilesPerSide; chunkX++) {
-			for (let chunkY = 0; chunkY < tilesPerSide; chunkY++) {
-				const chunkIndex = chunkX * tilesPerSide + chunkY;
+		for (let chunkX = 0; chunkX < chunksPerSide; chunkX++) {
+			for (let chunkY = 0; chunkY < chunksPerSide; chunkY++) {
+				const chunkIndex = chunkX * chunksPerSide + chunkY;
 				const chunk = chunks[chunkIndex];
 				
 				if (!chunk || !chunk.vertices) continue;
@@ -84,6 +81,9 @@ class R16Writer {
 								const heightValue = chunkVertices[vertexIndex] + chunkPosition[2];
 								heights[index] = heightValue;
 								heightSet[index] = true;
+
+								if (heightValue < this.minHeight) this.minHeight = heightValue;
+								if (heightValue > this.maxHeight) this.maxHeight = heightValue;
 							}
 						}
 						
@@ -131,54 +131,6 @@ class R16Writer {
 			}
 		}
 		this.heightData = heights;
-
-		// Set min/max heights for this local tile
-		for (const height of this.heightData) {
-			if (height < this.minHeight) this.minHeight = height;
-			if (height > this.maxHeight) this.maxHeight = height;
-		}
-	}
-
-	/**
-	 * Write the R16 heightmap file.
-	 * R16 format is a raw 16-bit unsigned integer heightmap.
-	 * @param {boolean} overwrite Whether to overwrite existing files
-	 */
-	async write(overwrite = true) {
-		// If overwriting is disabled, check file existence.
-		if (!overwrite && await generics.fileExists(this.out))
-			return;
-
-		await generics.createDirectory(path.dirname(this.out));
-		
-		// Create FileWriter with binary encoding
-		const writer = new FileWriter(this.out, 'binary');
-		
-		try {
-			// Create buffer for R16 data (2 bytes per pixel)
-			const fullSize = Math.sqrt(this.heightData.length);
-			const buffer = Buffer.alloc(fullSize * fullSize * 2);
-			
-			// Write height data as 16-bit unsigned integers (little-endian)
-			for (let i = 0; i < this.heightData.length; i++) {
-				// Normalize height to 0-1 range.
-				let normalizedHeight = (this.heightData[i] - this.minHeight) / (this.maxHeight - this.minHeight);
-
-				// Convert to 16-bit unsigned integer (0-65535 range)
-				const r16Value = Math.round(normalizedHeight * 65535);
-				buffer.writeUInt16LE(r16Value, i * 2);
-			}
-
-			// Write the buffer using FileWriter's underlying stream
-			await new Promise((resolve, reject) => {
-				writer.stream.write(buffer, (error) => {
-					if (error) reject(error);
-					else resolve();
-				});
-			});
-		} finally {
-			writer.close();
-		}
 	}
 }
 

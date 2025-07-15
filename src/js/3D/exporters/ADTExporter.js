@@ -210,14 +210,8 @@ class ADTExporter {
 	async export(dir, quality, gameObjects, helper, r16Writer = null) {
 		const casc = core.view.casc;
 		const config = core.view.config;
-		let outputType = 'ADT_OBJ';
-		if (config.mapsExportRaw) {
-			outputType = 'ADT_RAW';
-		} else if (config.mapsExportHeightmap) {
-			outputType = 'ADT_HEIGHTMAP';
-		}
-		
-		const out = { type: outputType, path: '' };
+
+		const out = { type: config.mapsExportRaw ? 'ADT_RAW' : 'ADT_OBJ', path: '' };
 
 		const usePosix = config.pathFormat === 'posix';
 		const prefix = util.format('world/maps/%s/%s', this.mapDir, this.mapDir);
@@ -324,21 +318,10 @@ class ADTExporter {
 			const chunkMeshes = new Array(256);
 
 			const objOut = path.join(dir, 'adt_' + this.tileID + '.obj');
-			
-			// Set appropriate output path based on export type
-			if (config.mapsExportHeightmap) {
-				out.path = path.join(dir, 'heightmap_' + this.tileID + '.r16');
-			} else {
-				out.path = objOut;
-			}
+			out.path = objOut;
 
-			let obj, mtl;
-			
-			// Only create OBJ/MTL writers if we're exporting OBJ format
-			if (config.mapsExportOBJ) {
-				obj = new OBJWriter(objOut);
-				mtl = new MTLWriter(path.join(dir, 'adt_' + this.tileID + '.mtl'));
-			}
+			const obj = new OBJWriter(objOut);
+			const mtl = new MTLWriter(path.join(dir, 'adt_' + this.tileID + '.mtl'));
 
 			const firstChunk = rootAdt.chunks[0];
 			const firstChunkX = firstChunk.position[0];
@@ -478,24 +461,22 @@ class ADTExporter {
 			if (config.mapsExportOBJ) {
 				if ((!isAlphaMaps && !isSplittingTextures) || (isAlphaMaps && !isSplittingAlphaMaps))
 					mtl.addMaterial('tex_' + this.tileID, 'tex_' + this.tileID + '.png');
-			
+				
 				obj.setVertArray(vertices);
 				obj.setNormalArray(normals);
 				obj.addUVArray(uvs);
-
+				
 				if (!mtl.isEmpty)
 					obj.setMaterialLibrary(path.basename(mtl.out));
-			}
 
-			// Export heightmap if R16Writer is provided
-			if (config.mapsExportHeightmap) {
-				r16Writer.setHeightDataFromChunks(rootAdt.chunks);
-				r16Writer.out = path.join(dir, 'heightmap_' + this.tileID + '.r16');
-			}
-			
-			if (config.mapsExportOBJ) {
 				await obj.write(config.overwriteFiles);
 				await mtl.write(config.overwriteFiles);
+			}
+			
+			if (r16Writer) {
+				r16Writer.setHeightDataFromChunks(rootAdt.chunks);
+				r16Writer.column = this.tileY;
+				r16Writer.row = this.tileX;
 			}
 
 			if (quality !== 0) {
@@ -1312,7 +1293,8 @@ class ADTExporter {
 			}
 		}
 
-		return out;
+		if(config.mapsExportOBJ || config.mapsExportRaw) return out;
+		return;
 	}
 
 	/**
