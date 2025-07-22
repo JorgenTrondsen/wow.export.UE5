@@ -273,6 +273,14 @@
 							<span>Enable</span>
 						</label>
 					</div>
+					<div v-if="!configEdit.splitAlphaMaps">
+						<h1>Downscale Alpha Maps</h1>
+						<p>If enabled, merged alpha maps will be downscaled from 1024x1024 to 256x256.</p>
+						<label class="ui-checkbox">
+							<input type="checkbox" v-model="configEdit.downscaleAlphaMaps"/>
+							<span>Enable</span>
+						</label>
+					</div>
 					<div>
 						<h1>Show unknown items</h1>
 						<p>When enabled, wow.export will list all items in the items tab, even those without a name.</p>

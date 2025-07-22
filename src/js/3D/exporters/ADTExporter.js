@@ -473,10 +473,11 @@ class ADTExporter {
 				await mtl.write(config.overwriteFiles);
 			}
 			
-			if (r16Writer) {
-				r16Writer.setHeightDataFromChunks(rootAdt.chunks);
+			if (config.mapsExportHeightmap) {
+				r16Writer.out = path.join(dir, 'heightmap_' + this.tileID + '.r16');
 				r16Writer.column = this.tileY;
 				r16Writer.row = this.tileX;
+				r16Writer.setHeightDataFromChunks(rootAdt.chunks);
 			}
 
 			if (quality !== 0) {
@@ -660,7 +661,19 @@ class ADTExporter {
 					// For combined alpha maps, export everything together once done.
 					if (!isSplittingAlphaMaps) {
 						const mergedPath = path.join(dir, 'tex_' + this.tileID + '.png');
-						const buf = await BufferWrapper.fromCanvas(canvas, 'image/png');
+
+						let finalCanvas = canvas;
+						if (core.view.config.downscaleAlphaMaps) {
+							const scaled = document.createElement('canvas');
+							scaled.width = 256;
+							scaled.height = 256;
+
+							const sctx = scaled.getContext('2d');
+							sctx.drawImage(canvas, 0, 0, 256, 256);
+							finalCanvas = scaled;
+						}
+
+						const buf = await BufferWrapper.fromCanvas(finalCanvas, 'image/png');
 						await buf.writeToFile(mergedPath);
 
 						const json = new JSONWriter(path.join(dir, 'tex_' + this.tileID + '.json'));

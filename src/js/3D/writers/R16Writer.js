@@ -3,12 +3,16 @@
 	Authors: Kruithne <kruithne@gmail.com>
 	License: MIT
  */
+const path = require('path');
+const generics = require('../../generics');
+const FileWriter = require('../../file-writer');
 
 class R16Writer {
 	/**
 	 * Construct a new R16Writer instance.
 	 */
 	constructor() {
+		this.out = null;
 		this.column = 0;
 		this.row = 0; 
 		this.heightData = [];
@@ -131,6 +135,48 @@ class R16Writer {
 			}
 		}
 		this.heightData = heights;
+	}
+
+	/**
+	 * Write the R16 heightmap file.
+	 * R16 format is a raw 16-bit unsigned integer heightmap.
+	 * @param {boolean} overwrite Whether to overwrite existing files
+	 */
+	async write(overwrite = true) {
+		// If overwriting is disabled, check file existence.
+		if (!overwrite && await generics.fileExists(this.out))
+			return;
+
+		await generics.createDirectory(path.dirname(this.out));
+		
+		// Create FileWriter with binary encoding
+		const writer = new FileWriter(this.out, 'binary');
+		
+		try {
+			// Create buffer for R16 data (2 bytes per pixel)
+			const fullSize = Math.sqrt(this.heightData.length);
+			const buffer = Buffer.alloc(fullSize * fullSize * 2);
+			
+			// Write height data as 16-bit unsigned integers (little-endian)
+			for (let i = 0; i < this.heightData.length; i++) {
+				// Normalize height to 0-1 range.
+				let normalizedHeight = (this.heightData[i] - this.minHeight) / (this.maxHeight - this.minHeight);
+
+				// Convert to 16-bit unsigned integer (0-65535 range)
+				const r16Value = Math.round(normalizedHeight * 65535);
+				buffer.writeUInt16LE(r16Value, i * 2);
+			}
+
+			// Write the buffer using FileWriter's underlying stream
+			await new Promise((resolve, reject) => {
+				writer.stream.write(buffer, (error) => {
+					if (error) reject(error);
+					else resolve();
+				});
+			});
+		} finally {
+			writer.close();
+		}
 	}
 }
 

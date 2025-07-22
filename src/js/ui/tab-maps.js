@@ -272,16 +272,14 @@ const exportSelectedMap = async () => {
 			adtExports.push({ out, index: i });
 
 			if (r16){
-				// Store r16 for second pass as a 2D array
-				if (!r16Writers[r16.column]) r16Writers[r16.column] = [];
-				r16Writers[r16.column][r16.row] = r16;
-				
+				r16Writers.push(r16);
+
 				// Get min/max heights from this tile and update global values
 				const { minHeight: min, maxHeight: max } = r16;
 				if (min < globalMinHeight) globalMinHeight = min;
 				if (max > globalMaxHeight) globalMaxHeight = max;
 				
-				// extract tile column/row, then compare to min/max variables
+				// Extract tile column/row, then compare to min/max values
 				if (r16.column < columnTileMin) columnTileMin = r16.column;
 				if (r16.column > columnTileMax) columnTileMax = r16.column;
 				if (r16.row < rowTileMin) rowTileMin = r16.row;
@@ -295,53 +293,30 @@ const exportSelectedMap = async () => {
 			helper.mark(markPath, false, e.message, e.stack);
 		}
 	}	
-	// Second pass: Process R16Writers and create global heightmap
-	if (core.view.config.mapsExportHeightmap) {
-		helper.setCurrentTaskName(`Pass 2: Creating global heightmap`);
+	// Second pass: Set global min/max for all R16Writers and write files
+	if (r16Writers.length > 0) {
+		for (let i = 0; i < r16Writers.length; i++) {
+			// Abort if the export has been cancelled.
+			if (helper.isCancelled())
+				break;
 
-		// Create a global heightmap data array 
-		const totalVerticesX = (257 * (columnTileMax - columnTileMin + 1)) - (columnTileMax - columnTileMin); 	// Tiles share edge vertices so we subtract the number of shared edges
-		const totalVerticesY = (257 * (rowTileMax - rowTileMin + 1)) - (rowTileMax - rowTileMin);
-		const globalHeightmapData  = new Uint16Array(totalVerticesX * totalVerticesY).fill(0);
+			const r16Writer = r16Writers[i];
+			
+			helper.setCurrentTaskName(`Pass 2: Writing R16 heightmap ${i + 1}/${r16Writers.length}`);
+			helper.setCurrentTaskValue(exportTiles.length + i);			
 
-		// Iterate through the tiles in r16Writers and fill the global heightmap data
-		for (let x = columnTileMin; x <= columnTileMax; x++) {
-			for (let y = rowTileMin; y <= rowTileMax; y++) {
-				const r16 = r16Writers[x][y];
-				if (!r16) continue;
+			try {
+				// Set global min/max heights for uniform normalization
+				r16Writer.minHeight = globalMinHeight;
+				r16Writer.maxHeight = globalMaxHeight;
+				
+				// Write the R16 file
+				await r16Writer.write();			
 
-				// Calculate the starting index in the global heightmap data
-				const shiftX = x - columnTileMin;
-				const shiftY = y - rowTileMin;
-				const tileStartX = (x - columnTileMin) * 257 - shiftX;	// Each tile contributes 257 vertices, but we need to account for the shared edges
-				const tileStartY = ((y - rowTileMin) * 257 - shiftY) * totalVerticesX;
-				for (let i = 0; i < r16.heightData.length; i++) {
-					// Calculate the local position within the tile
-					const localX = i % 257;
-                    const localY = Math.floor(i / 257);
-
-					// Calculate the global position in the heightmap data
-                    const globalX = tileStartX + localX;
-                    const globalY = tileStartY + localY* totalVerticesX;
-
-					// Normalize the height data to the global min/max range
-					const normalizedHeight = (r16.heightData[i] - globalMinHeight) / (globalMaxHeight - globalMinHeight);
-					const r16Value = Math.round(normalizedHeight * 65535);
-
-                    globalHeightmapData[globalY + globalX] = r16Value;
-				}
+			} catch (e) {
+				helper.mark(markPath, false, e.message, e.stack);
 			}
 		}
-
-		// Create a buffer to write the global heightmap data
-		const buffer = BufferWrapper.alloc(totalVerticesX * totalVerticesY * 2, true);
-		for (let i = 0; i < globalHeightmapData.length; i++) {
-			buffer.writeUInt16LE(globalHeightmapData[i]);
-		}
-
-		// Write the global heightmap buffer to file
-		const heightmapPath = path.join(dir, `${selectedMapDir}_heightmap.r16`);
-		await buffer.writeToFile(heightmapPath);
 
 
 		// Write metadata file
@@ -357,16 +332,10 @@ const exportSelectedMap = async () => {
 				},
 				tile_range: {
 					column_min: columnTileMin,
-					column_max: columnTileMax,
 					row_min: rowTileMin,
-					row_max: rowTileMax,
 					column_count: columnTileMax - columnTileMin + 1,
 					row_count: rowTileMax - rowTileMin + 1
-				},
-				total_vertices: {
-					x: totalVerticesX,
-					y: totalVerticesY
-				},
+				}
 			};
 			
 			await metadataWriter.writeLine(JSON.stringify(metadata, null, 2));
