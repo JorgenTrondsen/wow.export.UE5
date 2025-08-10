@@ -325,16 +325,13 @@ const exportSelectedMap = async () => {
 			const metadataWriter = new FileWriter(metadataPath);
 			
 			const metadata = {
-				height_range: {
-					min_height: globalMinHeight,
-					max_height: globalMaxHeight,
-					range: globalMaxHeight - globalMinHeight
+				height_data: {
+					range: globalMaxHeight - globalMinHeight,
+					normalized_sealevel: (0 - globalMinHeight) / (globalMaxHeight - globalMinHeight),
 				},
-				tile_range: {
-					column_min: columnTileMin,
-					row_min: rowTileMin,
-					column_count: columnTileMax - columnTileMin + 1,
-					row_count: rowTileMax - rowTileMin + 1
+				tile_data: {
+					columns: columnTileMax + 1,
+					rows: rowTileMax + 1,
 				}
 			};
 			

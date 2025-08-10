@@ -82,7 +82,7 @@ class R16Writer {
 							
 							const index = globalY * fullSize + globalX;
 							if (!heightSet[index]) {
-								const heightValue = chunkVertices[vertexIndex] + chunkPosition[2];
+								let heightValue = Math.max(chunkVertices[vertexIndex] + chunkPosition[2], -1650);	// Values below -1650 are redundant
 								heights[index] = heightValue;
 								heightSet[index] = true;
 
@@ -90,7 +90,6 @@ class R16Writer {
 								if (heightValue > this.maxHeight) this.maxHeight = heightValue;
 							}
 						}
-						
 						vertexIndex++;
 					}
 				}
