@@ -604,6 +604,10 @@
 								<input type="checkbox" v-model="config.modelsExportAlpha"/>
 								<span>Texture Alpha</span>
 							</label>
+							<label v-if="config.exportModelFormat === 'OBJ' || config.exportModelFormat === 'GLTF'" class="ui-checkbox" title="Remove back-facing triangles from single-sided materials (recommended for banners/flags)">
+								<input type="checkbox" v-model="config.modelsRemoveBackFaces"/>
+								<span>Remove Back Faces</span>
+							</label>
 							<label v-if="config.exportModelFormat === 'GLTF' && modelViewerActiveType === 'm2'" class="ui-checkbox" title="Include animations in export">
 								<input type="checkbox" v-model="config.modelsExportAnimations"/>
 								<span>Export animations</span>

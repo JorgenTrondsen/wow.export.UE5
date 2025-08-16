@@ -19,6 +19,7 @@ const JSONWriter = require('../writers/JSONWriter');
 const ExportHelper = require('../../casc/export-helper');
 const M2Exporter = require('./M2Exporter');
 const M3Exporter = require('./M3Exporter');
+const FaceCuller = require('../FaceCuller');
 const constants = require('../../constants');
 
 const doodadCache = new Set();
@@ -306,12 +307,25 @@ class WMOExporter {
 			// Load all render batches into the mesh.
 			for (let bI = 0, bC = group.renderBatches.length; bI < bC; bI++) {
 				const batch = group.renderBatches[bI];
-				const indices = new Array(batch.numFaces);
+				let indices = new Array(batch.numFaces);
 
 				for (let i = 0; i < batch.numFaces; i++)
 					indices[i] = group.indices[batch.firstFace + i] + indOfs;
 
 				const matID = batch.flags === 2 ? batch.possibleBox2[2] : batch.materialID;
+				
+				// Check if material is single-sided (not double-sided)
+				// WMO material flag 0x1 indicates nocull (double-sided rendering)
+				let isDoubleSided = false;
+				if (this.wmo.materials && this.wmo.materials[matID]) {
+					isDoubleSided = (this.wmo.materials[matID].flags & 0x1) !== 0;
+				}
+
+				// For single-sided materials, remove back-facing triangles to ensure only one face per surface
+				if (!isDoubleSided && core.view.config.modelsRemoveBackFaces) {
+					indices = FaceCuller.cullBackFaces(indices, vertsArray);
+				}
+
 				gltf.addMesh(groupName + bI, indices, gltf_texture_lookup.get(matID));
 			}
 
@@ -458,12 +472,25 @@ class WMOExporter {
 			// Load all render batches into the mesh.
 			for (let bI = 0, bC = group.renderBatches.length; bI < bC; bI++) {
 				const batch = group.renderBatches[bI];
-				const indices = new Array(batch.numFaces);
+				let indices = new Array(batch.numFaces);
 
 				for (let i = 0; i < batch.numFaces; i++)
 					indices[i] = group.indices[batch.firstFace + i] + indOfs;
 
 				const matID = batch.flags === 2 ? batch.possibleBox2[2] : batch.materialID;
+				
+				// Check if material is single-sided (not double-sided)
+				// WMO material flag 0x1 indicates nocull (double-sided rendering)
+				let isDoubleSided = false;
+				if (wmo.materials && wmo.materials[matID]) {
+					isDoubleSided = (wmo.materials[matID].flags & 0x1) !== 0;
+				}
+
+				// For single-sided materials, remove back-facing triangles to ensure only one face per surface
+				if (!isDoubleSided && config.modelsRemoveBackFaces) {
+					indices = FaceCuller.cullBackFaces(indices, vertsArray);
+				}
+
 				obj.addMesh(groupName + bI, indices, materialMap.get(matID));
 			}
 

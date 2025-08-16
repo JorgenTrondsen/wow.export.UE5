@@ -19,6 +19,7 @@ const GLTFWriter = require('../writers/GLTFWriter');
 const GeosetMapper = require('../GeosetMapper');
 const ExportHelper = require('../../casc/export-helper');
 const BufferWrapper = require('../../buffer');
+const FaceCuller = require('../FaceCuller');
 
 class M2Exporter {
 	/**
@@ -314,7 +315,7 @@ class M2Exporter {
 				continue;
 
 			const mesh = skin.subMeshes[mI];
-			const indices = new Array(mesh.triangleCount);
+			let indices = new Array(mesh.triangleCount);
 			for (let vI = 0; vI < mesh.triangleCount; vI++)
 				indices[vI] = skin.indices[skin.triangles[mesh.triangleStart + vI]];
 
@@ -323,11 +324,23 @@ class M2Exporter {
 			if (texUnit)
 				texture = this.m2.textures[this.m2.textureCombos[texUnit.textureComboIndex]];
 
+			// Check if material is single-sided (not double-sided)
+			// Material flag 0x4 indicates double-sided rendering
+			let isDoubleSided = false;
+			if (texUnit && this.m2.materials[texUnit.materialIndex]) {
+				isDoubleSided = (this.m2.materials[texUnit.materialIndex].flags & 0x4) !== 0;
+			}
+
+			// For single-sided materials, remove back-facing triangles to ensure only one face per surface
+			if (!isDoubleSided && core.view.config.modelsRemoveBackFaces) {
+				indices = FaceCuller.cullBackFaces(indices, this.m2.vertices);
+			}
+
 			let matName;
 			if (texture?.fileDataID > 0 && textureMap.has(texture.fileDataID))
 				matName = texture.fileDataID;
 
-			if (this.dataTextures.has(this.m2.textureTypes[this.m2.textureCombos[texUnit.textureComboIndex]])) {
+			if (texUnit && this.dataTextures.has(this.m2.textureTypes[this.m2.textureCombos[texUnit.textureComboIndex]])) {
 				matName = 'data-' + this.m2.textureTypes[this.m2.textureCombos[texUnit.textureComboIndex]];
 				console.log("Setting meshIndex " + mI + " to " + matName);
 			}
@@ -476,7 +489,7 @@ class M2Exporter {
 				continue;
 
 			const mesh = skin.subMeshes[mI];
-			const verts = new Array(mesh.triangleCount);
+			let verts = new Array(mesh.triangleCount);
 			for (let vI = 0; vI < mesh.triangleCount; vI++)
 				verts[vI] = skin.indices[skin.triangles[mesh.triangleStart + vI]];
 
@@ -484,6 +497,18 @@ class M2Exporter {
 			const texUnit = skin.textureUnits.find(tex => tex.skinSectionIndex === mI);
 			if (texUnit)
 				texture = this.m2.textures[this.m2.textureCombos[texUnit.textureComboIndex]];
+
+			// Check if material is single-sided (not double-sided)
+			// Material flag 0x4 indicates double-sided rendering
+			let isDoubleSided = false;
+			if (texUnit && this.m2.materials[texUnit.materialIndex]) {
+				isDoubleSided = (this.m2.materials[texUnit.materialIndex].flags & 0x4) !== 0;
+			}
+
+			// For single-sided materials, remove back-facing triangles to ensure only one face per surface
+			if (!isDoubleSided && config.modelsRemoveBackFaces) {
+				verts = FaceCuller.cullBackFaces(verts, this.m2.vertices);
+			}
 
 			let matName;
 			if (texture?.fileDataID > 0 && validTextures.has(texture.fileDataID))
