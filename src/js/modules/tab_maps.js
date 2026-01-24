@@ -228,10 +228,16 @@ const extract_height_data_from_tile = async (adt, resolution) => {
 		}
 
 		const heights = new Float32Array(resolution * resolution);
+		const effective_res = resolution > 1 ? resolution - 1 : 1;
+
 		for (let py = 0; py < resolution; py++) {
 			for (let px = 0; px < resolution; px++) {
-				const chunk_x = Math.floor(px * 16 / resolution);
-				const chunk_y = Math.floor(py * 16 / resolution);
+				let chunk_x = Math.floor(px * 16 / effective_res);
+				let chunk_y = Math.floor(py * 16 / effective_res);
+
+				if (chunk_x > 15) chunk_x = 15;
+				if (chunk_y > 15) chunk_y = 15;
+
 				const chunk_index = chunk_y * 16 + chunk_x;
 
 				if (chunk_index >= root_adt.chunks.length)
@@ -241,13 +247,12 @@ const extract_height_data_from_tile = async (adt, resolution) => {
 				if (!chunk || !chunk.vertices)
 					continue;
 
-				const local_x = (px * 16 / resolution) - chunk_x;
-				const local_y = (py * 16 / resolution) - chunk_y;
+				const local_x = (px * 16 / effective_res) - chunk_x;
+				const local_y = (py * 16 / effective_res) - chunk_y;
 
 				const height = sample_chunk_height(chunk, local_x, local_y);
 
-				// rotate 90° CW to align with terrain mesh coordinate system
-				const height_idx = (resolution - 1 - px) * resolution + py;
+				const height_idx = (py * resolution) + px;
 				heights[height_idx] = height;
 			}
 		}
