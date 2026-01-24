@@ -17,6 +17,7 @@ const WMOExporter = require('../3D/exporters/WMOExporter');
 const WMOLoader = require('../3D/loaders/WMOLoader');
 const TiledPNGWriter = require('../tiled-png-writer');
 const PNGWriter = require('../png-writer');
+const FileWriter = require('../file-writer');
 
 const TILE_SIZE = constants.GAME.TILE_SIZE;
 const MAP_OFFSET = constants.GAME.MAP_OFFSET;
@@ -954,6 +955,8 @@ module.exports = {
 			this.$core.setToast('progress', 'Calculating height range across all tiles...', null, -1, false);
 			let global_min_height = Infinity;
 			let global_max_height = -Infinity;
+			let max_tileX = -Infinity; 
+			let max_tileY = -Infinity;
 
 			for (let i = 0; i < export_tiles.length; i++) {
 				const tile_index = export_tiles[i];
@@ -961,6 +964,9 @@ module.exports = {
 				try {
 					const adt = new ADTExporter(selected_map_id, selected_map_dir, tile_index);
 					const height_data = await extract_height_data_from_tile(adt, export_resolution);
+					
+					max_tileX = Math.max(max_tileX, adt.tileX);
+					max_tileY = Math.max(max_tileY, adt.tileY);
 
 					if (height_data && height_data.heights) {
 						let tile_min = Infinity;
@@ -1080,6 +1086,29 @@ module.exports = {
 					helper.mark(filename, false, e.message, e.stack);
 					log.write('failed to export heightmap for tile %d: %s', tile_index, e.message);
 				}
+			}
+
+			// Write metadata file
+			try {
+				const metadataPath = path.join(dir, 'heightmap_metadata.json');
+				const metadataWriter = new FileWriter(metadataPath);
+				
+				const metadata = {
+					height_data: {
+						range: global_max_height - global_min_height,
+						normalized_sealevel: (0 - global_min_height) / (global_max_height - global_min_height),
+					},
+					tile_data: {
+						columns: max_tileY + 1,
+						rows: max_tileX + 1,
+					}
+				};
+				
+				await metadataWriter.writeLine(JSON.stringify(metadata, null, 2));
+				metadataWriter.close();
+
+			} catch (e) {
+				helper.mark('heightmap metadata', false, e.message, e.stack);
 			}
 
 			export_paths?.close();
