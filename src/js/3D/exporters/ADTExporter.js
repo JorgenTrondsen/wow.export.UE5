@@ -299,6 +299,306 @@ class ADTExporter {
 	}
 
 	/**
+	 * Export alpha maps for the ADT tile.
+	 * @param {string} dir Directory to export into
+	 * @param {ADTLoader} texAdt Texture ADT data
+	 * @param {ADTLoader} rootAdt Root ADT data
+	 * @param {boolean} usePosix Use POSIX path format
+	 * @param {boolean} isSplittingAlphaMaps Split alpha maps per chunk
+	 * @param {number} resolution Resolution for combined alpha maps (optional)
+	 * @param {ExportHelper} helper Export helper for progress tracking
+	 */
+	async exportAlphaMaps(dir, texAdt, rootAdt, usePosix, isSplittingAlphaMaps, resolution, helper) {
+		const config = core.view.config;
+
+		const materialIDs = texAdt.diffuseTextureFileDataIDs;
+		const heightIDs = texAdt.heightTextureFileDataIDs;
+		const texParams = texAdt.texParams;
+
+		const saveLayerTexture = async (fileDataID) => {
+			const blp = new BLPFile(await core.view.casc.getFile(fileDataID));
+			let fileName = listfile.getByID(fileDataID);
+			if (fileName !== undefined)
+				fileName = ExportHelper.replaceExtension(fileName, '.png');
+			else
+				fileName = listfile.formatUnknownFile(fileDataID, '.png');
+		
+			let texFile;
+			let texPath;
+		
+			if (config.enableSharedTextures) {
+				texPath = ExportHelper.getExportPath(fileName);
+				texFile = path.relative(dir, texPath);
+			} else {
+				texPath = path.join(dir, path.basename(fileName));
+				texFile = path.basename(texPath);
+			}
+		
+			await blp.saveToPNG(texPath);
+		
+			return usePosix ? ExportHelper.win32ToPosix(texFile) : texFile;
+		};
+
+		// Export the raw diffuse textures to disk.
+		const materials = new Array(materialIDs.length);
+		for (let i = 0, n = materials.length; i < n; i++) {
+			// Abort if the export has been cancelled.
+			if (helper.isCancelled())
+				return;
+
+			const diffuseFileDataID = materialIDs[i];
+			const heightFileDataID = heightIDs[i] ?? 0;
+			if (diffuseFileDataID === 0)
+				continue;
+
+			const mat = materials[i] = { scale: 1, fileDataID: diffuseFileDataID };
+			mat.file = await saveLayerTexture(diffuseFileDataID);
+
+			// Include a reference to the height map texture if it exists.
+			if (heightFileDataID > 0) {
+				mat.heightFile = await saveLayerTexture(heightFileDataID);
+				mat.heightFileDataID = heightFileDataID;
+			}
+
+			if (texParams && texParams[i]) {
+				const params = texParams[i];
+				mat.scale = Math.pow(2, (params.flags & 0xF0) >> 4);
+
+				if (params.height !== 0 || params.offset !== 1) {
+					mat.heightScale = params.height;
+					mat.heightOffset = params.offset;
+				}
+			}
+		}
+
+		// Alpha maps are 64x64, we're not up-scaling here.
+
+		const chunks = texAdt.texChunks;
+		const chunkCount = chunks.length;
+
+		helper.setCurrentTaskName('Tile ' + this.tileID + ' alpha maps');
+		helper.setCurrentTaskMax(16 * 16);
+
+		const layers = [];
+		const vertexColors = [];
+
+		for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
+			// Abort if the export has been cancelled.
+			if (helper.isCancelled())
+				return;
+
+			helper.setCurrentTaskValue(chunkIndex);
+
+			const texChunk = texAdt.texChunks[chunkIndex];
+			const rootChunk = rootAdt.chunks[chunkIndex];
+
+			const fix_alpha_map = !(rootChunk.flags & (1 << 15));
+
+			const alphaLayers = texChunk.alphaLayers || [];
+			const requiredImages = calculateRequiredImages(alphaLayers.length);
+
+			if (isSplittingAlphaMaps) {
+				// Export individual chunk files with multi-image support
+				const prefix = this.tileID + '_' + chunkIndex;
+				const texLayers = texChunk.layers;
+
+				for (let imageIndex = 0; imageIndex < Math.max(1, requiredImages); imageIndex++) {
+					const pngWriter = new PNGWriter(64, 64);
+					const pixelData = pngWriter.getPixelData();
+
+					// Set unused channels to 0 and alpha channel to 255 if not used for data first
+					for (let j = 0; j < 64 * 64; j++) {
+						const pixelOffset = j * 4;
+						pixelData[pixelOffset + 0] = 0; // R = 0
+						pixelData[pixelOffset + 1] = 0; // G = 0
+						pixelData[pixelOffset + 2] = 0; // B = 0
+						pixelData[pixelOffset + 3] = 255; // A = 255
+					}
+
+					// Write layers to this image (4 layers per image starting from layer 1)
+					const startLayer = (imageIndex * 4) + 1;
+					const endLayer = Math.min(startLayer + 4, alphaLayers.length);
+
+					for (let layerIdx = startLayer; layerIdx < endLayer; layerIdx++) {
+						const layer = alphaLayers[layerIdx];
+						const channelIdx = (layerIdx - startLayer); // 0, 1, 2, 3 for R, G, B, A
+
+						for (let j = 0; j < layer.length; j++) {
+							const isLastColumn = (j % 64) === 63;
+							const isLastRow = j >= 63 * 64;
+
+							// fix_alpha_map: layer is 63x63, fill last column/row.
+							if (fix_alpha_map) {
+								if (isLastColumn && !isLastRow) {
+									pixelData[(j * 4) + channelIdx] = layer[j - 1];
+								} else if (isLastRow) {
+									const prevRowIndex = j - 64;
+									pixelData[(j * 4) + channelIdx] = layer[prevRowIndex];
+								} else {
+									pixelData[(j * 4) + channelIdx] = layer[j];
+								}
+							} else {
+								pixelData[(j * 4) + channelIdx] = layer[j];
+							}
+						}
+					}
+
+					// determine file name: first image keeps original naming, additional get suffix
+					const imageSuffix = imageIndex === 0 ? '' : '_' + imageIndex;
+					const tilePath = path.join(dir, 'tex_' + prefix + imageSuffix + '.png');
+
+					await pngWriter.write(tilePath);
+				}
+
+				// Create JSON metadata with image/channel mapping
+				for (let i = 0, n = texLayers.length; i < n; i++) {
+					const layer = texLayers[i];
+					const mat = materials[layer.textureId];
+					if (mat !== undefined) {
+						const layerInfo = Object.assign({
+							index: i,
+							effectID: layer.effectID,
+							imageIndex: i === 0 ? 0 : Math.floor((i - 1) / 4),
+							channelIndex: i === 0 ? -1 : (i - 1) % 4
+						}, mat);
+						layers.push(layerInfo);
+					}
+				}
+
+				const json = new JSONWriter(path.join(dir, 'tex_' + prefix + '.json'));
+				json.addProperty('layers', layers);
+
+				if (rootChunk.vertexShading)
+					json.addProperty('vertexColors', rootChunk.vertexShading.map(e => rgbaToInt(e)));
+
+				await json.write();
+
+				layers.length = 0;
+			} else {
+				// Combined alpha maps - metadata collection for combined export
+				const texLayers = texChunk.layers;
+				for (let i = 0, n = texLayers.length; i < n; i++) {
+					const layer = texLayers[i];
+					const mat = materials[layer.textureId];
+					if (mat !== undefined) {
+						const layerInfo = Object.assign({
+							index: i,
+							chunkIndex,
+							effectID: layer.effectID,
+							imageIndex: i === 0 ? 0 : Math.floor((i - 1) / 4),
+							channelIndex: i === 0 ? -1 : (i - 1) % 4
+						}, mat);
+						layers.push(layerInfo);
+					}
+				}
+
+				if (rootChunk.vertexShading)
+					vertexColors.push({ chunkIndex, shading: rootChunk.vertexShading.map(e => rgbaToInt(e)) });
+			}
+		}
+
+		// For combined alpha maps, export everything together once done.
+		if (!isSplittingAlphaMaps) {
+			// determine max layers across all chunks to know how many images we need
+			let maxLayersNeeded = 1;
+			for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
+				const texChunk = texAdt.texChunks[chunkIndex];
+				const alphaLayers = texChunk.alphaLayers || [];
+				const required = calculateRequiredImages(alphaLayers.length);
+				maxLayersNeeded = Math.max(maxLayersNeeded, required);
+			}
+
+			// export multiple combined images if needed
+			for (let imageIndex = 0; imageIndex < maxLayersNeeded; imageIndex++) {
+				const pngWriter = new PNGWriter(64 * 16, 64 * 16);
+				const pixelData = pngWriter.getPixelData();
+
+				// Initialize all pixels to default values
+				for (let i = 0; i < pixelData.length; i += 4) {
+					pixelData[i + 0] = 0; // R = 0
+					pixelData[i + 1] = 0; // G = 0
+					pixelData[i + 2] = 0; // B = 0
+					pixelData[i + 3] = 255; // A = 255
+				}
+
+				// process all chunks for this image
+				for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
+					const texChunk = texAdt.texChunks[chunkIndex];
+					const rootChunk = rootAdt.chunks[chunkIndex];
+					const fix_alpha_map = !(rootChunk.flags & (1 << 15));
+					const alphaLayers = texChunk.alphaLayers || [];
+
+					const chunkX = chunkIndex % 16;
+					const chunkY = Math.floor(chunkIndex / 16);
+
+					// Write layers to this image (4 layers per image starting from layer 1)
+					const startLayer = (imageIndex * 4) + 1;
+					const endLayer = Math.min(startLayer + 4, alphaLayers.length);
+
+					for (let layerIdx = startLayer; layerIdx < endLayer; layerIdx++) {
+						const layer = alphaLayers[layerIdx];
+						const channelIdx = (layerIdx - startLayer); // 0, 1, 2, 3 for R, G, B, A
+
+						for (let j = 0; j < layer.length; j++) {
+							const isLastColumn = (j % 64) === 63;
+							const isLastRow = j >= 63 * 64;
+
+							// Calculate position in combined image
+							const localX = j % 64;
+							const localY = Math.floor(j / 64);
+							const globalX = chunkX * 64 + localX;
+							const globalY = chunkY * 64 + localY;
+							const globalIndex = (globalY * (64 * 16) + globalX) * 4 + channelIdx;
+
+							// fix_alpha_map: layer is 63x63, fill last column/row.
+							if (fix_alpha_map) {
+								if (isLastColumn && !isLastRow) {
+									pixelData[globalIndex] = layer[j - 1];
+								} else if (isLastRow) {
+									const prevRowIndex = j - 64;
+									pixelData[globalIndex] = layer[prevRowIndex];
+								} else {
+									pixelData[globalIndex] = layer[j];
+								}
+							} else {
+								pixelData[globalIndex] = layer[j];
+							}
+						}
+					}
+				}
+
+				// save the combined image
+				const imageSuffix = imageIndex === 0 ? '' : '_' + imageIndex;
+				const mergedPath = path.join(dir, 'tex_' + this.tileID + imageSuffix + '.png');
+				
+				// Downsample to requested resolution if specified
+				const defaultSize = 64 * 16;
+				if (resolution && resolution !== defaultSize) {
+					const canvas = new OffscreenCanvas(defaultSize, defaultSize);
+					const ctx = canvas.getContext('2d');
+					const imageData = new ImageData(new Uint8ClampedArray(pixelData), defaultSize, defaultSize);
+					ctx.putImageData(imageData, 0, 0);
+					
+					const scaled = new OffscreenCanvas(resolution, resolution);
+					scaled.getContext('2d').drawImage(canvas, 0, 0, resolution, resolution);
+					
+					await (await BufferWrapper.fromCanvas(scaled, 'image/png')).writeToFile(mergedPath);
+				} else {
+					await pngWriter.write(mergedPath);
+				}
+			}
+			// write json metadata
+			const json = new JSONWriter(path.join(dir, 'tex_' + this.tileID + '.json'));
+			json.addProperty('layers', layers);
+
+			if (vertexColors.length > 0)
+				json.addProperty('vertexColors', vertexColors);
+
+			await json.write();
+		}
+	}
+
+	/**
 	 * Export the ADT tile.
 	 * @param {string} dir Directory to export the tile into.
 	 * @param {number} textureRes
@@ -586,278 +886,7 @@ class ADTExporter {
 			if (quality !== 0) {
 				if (isAlphaMaps) {
 					// Export alpha maps.
-
-					const materialIDs = texAdt.diffuseTextureFileDataIDs;
-					const heightIDs = texAdt.heightTextureFileDataIDs;
-					const texParams = texAdt.texParams;
-
-					const saveLayerTexture = async (fileDataID) => {
-						const blp = new BLPFile(await core.view.casc.getFile(fileDataID));
-						let fileName = listfile.getByID(fileDataID);
-						if (fileName !== undefined)
-							fileName = ExportHelper.replaceExtension(fileName, '.png');
-						else
-							fileName = listfile.formatUnknownFile(fileDataID, '.png');
-					
-						let texFile;
-						let texPath;
-					
-						if (config.enableSharedTextures) {
-							texPath = ExportHelper.getExportPath(fileName);
-							texFile = path.relative(dir, texPath);
-						} else {
-							texPath = path.join(dir, path.basename(fileName));
-							texFile = path.basename(texPath);
-						}
-					
-						await blp.saveToPNG(texPath);
-					
-						return usePosix ? ExportHelper.win32ToPosix(texFile) : texFile;
-					};
-
-					// Export the raw diffuse textures to disk.
-					const materials = new Array(materialIDs.length);
-					for (let i = 0, n = materials.length; i < n; i++) {
-						// Abort if the export has been cancelled.
-						if (helper.isCancelled())
-							return;
-
-						const diffuseFileDataID = materialIDs[i];
-						const heightFileDataID = heightIDs[i] ?? 0;
-						if (diffuseFileDataID === 0)
-							continue;
-
-						const mat = materials[i] = { scale: 1, fileDataID: diffuseFileDataID };
-						mat.file = await saveLayerTexture(diffuseFileDataID);
-
-						// Include a reference to the height map texture if it exists.
-						if (heightFileDataID > 0) {
-							mat.heightFile = await saveLayerTexture(heightFileDataID);
-							mat.heightFileDataID = heightFileDataID;
-						}
-
-						if (texParams && texParams[i]) {
-							const params = texParams[i];
-							mat.scale = Math.pow(2, (params.flags & 0xF0) >> 4);
-
-							if (params.height !== 0 || params.offset !== 1) {
-								mat.heightScale = params.height;
-								mat.heightOffset = params.offset;
-							}
-						}
-					}
-
-					// Alpha maps are 64x64, we're not up-scaling here.
-
-					const chunks = texAdt.texChunks;
-					const chunkCount = chunks.length;
-
-					helper.setCurrentTaskName('Tile ' + this.tileID + ' alpha maps');
-					helper.setCurrentTaskMax(16 * 16);
-
-					const layers = [];
-					const vertexColors = [];
-
-					for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
-						// Abort if the export has been cancelled.
-						if (helper.isCancelled())
-							return;
-
-						helper.setCurrentTaskValue(chunkIndex);
-
-						const texChunk = texAdt.texChunks[chunkIndex];
-						const rootChunk = rootAdt.chunks[chunkIndex];
-
-						const fix_alpha_map = !(rootChunk.flags & (1 << 15));
-
-						const alphaLayers = texChunk.alphaLayers || [];
-						const requiredImages = calculateRequiredImages(alphaLayers.length);
-
-						if (isSplittingAlphaMaps) {
-							// Export individual chunk files with multi-image support
-							const prefix = this.tileID + '_' + chunkIndex;
-							const texLayers = texChunk.layers;
-
-							for (let imageIndex = 0; imageIndex < Math.max(1, requiredImages); imageIndex++) {
-								const pngWriter = new PNGWriter(64, 64);
-								const pixelData = pngWriter.getPixelData();
-
-								// Set unused channels to 0 and alpha channel to 255 if not used for data first
-								for (let j = 0; j < 64 * 64; j++) {
-									const pixelOffset = j * 4;
-									pixelData[pixelOffset + 0] = 0; // R = 0
-									pixelData[pixelOffset + 1] = 0; // G = 0
-									pixelData[pixelOffset + 2] = 0; // B = 0
-									pixelData[pixelOffset + 3] = 255; // A = 255
-								}
-
-								// Write layers to this image (4 layers per image starting from layer 1)
-								const startLayer = (imageIndex * 4) + 1;
-								const endLayer = Math.min(startLayer + 4, alphaLayers.length);
-
-								for (let layerIdx = startLayer; layerIdx < endLayer; layerIdx++) {
-									const layer = alphaLayers[layerIdx];
-									const channelIdx = (layerIdx - startLayer); // 0, 1, 2, 3 for R, G, B, A
-
-									for (let j = 0; j < layer.length; j++) {
-										const isLastColumn = (j % 64) === 63;
-										const isLastRow = j >= 63 * 64;
-
-										// fix_alpha_map: layer is 63x63, fill last column/row.
-										if (fix_alpha_map) {
-											if (isLastColumn && !isLastRow) {
-												pixelData[(j * 4) + channelIdx] = layer[j - 1];
-											} else if (isLastRow) {
-												const prevRowIndex = j - 64;
-												pixelData[(j * 4) + channelIdx] = layer[prevRowIndex];
-											} else {
-												pixelData[(j * 4) + channelIdx] = layer[j];
-											}
-										} else {
-											pixelData[(j * 4) + channelIdx] = layer[j];
-										}
-									}
-								}
-
-								// determine file name: first image keeps original naming, additional get suffix
-								const imageSuffix = imageIndex === 0 ? '' : '_' + imageIndex;
-								const tilePath = path.join(dir, 'tex_' + prefix + imageSuffix + '.png');
-
-								await pngWriter.write(tilePath);
-							}
-
-							// Create JSON metadata with image/channel mapping
-							for (let i = 0, n = texLayers.length; i < n; i++) {
-								const layer = texLayers[i];
-								const mat = materials[layer.textureId];
-								if (mat !== undefined) {
-									const layerInfo = Object.assign({
-										index: i,
-										effectID: layer.effectID,
-										imageIndex: i === 0 ? 0 : Math.floor((i - 1) / 4),
-										channelIndex: i === 0 ? -1 : (i - 1) % 4
-									}, mat);
-									layers.push(layerInfo);
-								}
-							}
-
-							const json = new JSONWriter(path.join(dir, 'tex_' + prefix + '.json'));
-							json.addProperty('layers', layers);
-
-							if (rootChunk.vertexShading)
-								json.addProperty('vertexColors', rootChunk.vertexShading.map(e => rgbaToInt(e)));
-
-							await json.write();
-
-							layers.length = 0;
-						} else {
-							// Combined alpha maps - metadata collection for combined export
-							const texLayers = texChunk.layers;
-							for (let i = 0, n = texLayers.length; i < n; i++) {
-								const layer = texLayers[i];
-								const mat = materials[layer.textureId];
-								if (mat !== undefined) {
-									const layerInfo = Object.assign({
-										index: i,
-										chunkIndex,
-										effectID: layer.effectID,
-										imageIndex: i === 0 ? 0 : Math.floor((i - 1) / 4),
-										channelIndex: i === 0 ? -1 : (i - 1) % 4
-									}, mat);
-									layers.push(layerInfo);
-								}
-							}
-
-							if (rootChunk.vertexShading)
-								vertexColors.push({ chunkIndex, shading: rootChunk.vertexShading.map(e => rgbaToInt(e)) });
-						}
-					}
-
-					// For combined alpha maps, export everything together once done.
-					if (!isSplittingAlphaMaps) {
-						// determine max layers across all chunks to know how many images we need
-						let maxLayersNeeded = 1;
-						for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
-							const texChunk = texAdt.texChunks[chunkIndex];
-							const alphaLayers = texChunk.alphaLayers || [];
-							const required = calculateRequiredImages(alphaLayers.length);
-							maxLayersNeeded = Math.max(maxLayersNeeded, required);
-						}
-
-						// export multiple combined images if needed
-						for (let imageIndex = 0; imageIndex < maxLayersNeeded; imageIndex++) {
-							const pngWriter = new PNGWriter(64 * 16, 64 * 16);
-							const pixelData = pngWriter.getPixelData();
-
-							// Initialize all pixels to default values
-							for (let i = 0; i < pixelData.length; i += 4) {
-								pixelData[i + 0] = 0; // R = 0
-								pixelData[i + 1] = 0; // G = 0
-								pixelData[i + 2] = 0; // B = 0
-								pixelData[i + 3] = 255; // A = 255
-							}
-
-							// process all chunks for this image
-							for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++) {
-								const texChunk = texAdt.texChunks[chunkIndex];
-								const rootChunk = rootAdt.chunks[chunkIndex];
-								const fix_alpha_map = !(rootChunk.flags & (1 << 15));
-								const alphaLayers = texChunk.alphaLayers || [];
-
-								const chunkX = chunkIndex % 16;
-								const chunkY = Math.floor(chunkIndex / 16);
-
-								// Write layers to this image (4 layers per image starting from layer 1)
-								const startLayer = (imageIndex * 4) + 1;
-								const endLayer = Math.min(startLayer + 4, alphaLayers.length);
-
-								for (let layerIdx = startLayer; layerIdx < endLayer; layerIdx++) {
-									const layer = alphaLayers[layerIdx];
-									const channelIdx = (layerIdx - startLayer); // 0, 1, 2, 3 for R, G, B, A
-
-									for (let j = 0; j < layer.length; j++) {
-										const isLastColumn = (j % 64) === 63;
-										const isLastRow = j >= 63 * 64;
-
-										// Calculate position in combined image
-										const localX = j % 64;
-										const localY = Math.floor(j / 64);
-										const globalX = chunkX * 64 + localX;
-										const globalY = chunkY * 64 + localY;
-										const globalIndex = (globalY * (64 * 16) + globalX) * 4 + channelIdx;
-
-										// fix_alpha_map: layer is 63x63, fill last column/row.
-										if (fix_alpha_map) {
-											if (isLastColumn && !isLastRow) {
-												pixelData[globalIndex] = layer[j - 1];
-											} else if (isLastRow) {
-												const prevRowIndex = j - 64;
-												pixelData[globalIndex] = layer[prevRowIndex];
-											} else {
-												pixelData[globalIndex] = layer[j];
-											}
-										} else {
-											pixelData[globalIndex] = layer[j];
-										}
-									}
-								}
-							}
-
-							// save the combined image
-							const imageSuffix = imageIndex === 0 ? '' : '_' + imageIndex;
-							const mergedPath = path.join(dir, 'tex_' + this.tileID + imageSuffix + '.png');
-							await pngWriter.write(mergedPath);
-						}
-
-						// write json metadata
-						const json = new JSONWriter(path.join(dir, 'tex_' + this.tileID + '.json'));
-						json.addProperty('layers', layers);
-
-						if (vertexColors.length > 0)
-							json.addProperty('vertexColors', vertexColors);
-
-						await json.write();
-					}
+					await this.exportAlphaMaps(dir, texAdt, rootAdt, usePosix, isSplittingAlphaMaps, null, helper);
 				} else if (quality <= 512) {
 					// Use minimaps for cheap textures.
 					const paddedX = this.tileY.toString().padStart(2, '0');

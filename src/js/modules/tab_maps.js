@@ -252,7 +252,12 @@ const extract_height_data_from_tile = async (adt, resolution) => {
 
 				const height = sample_chunk_height(chunk, local_x, local_y);
 
-				const height_idx = (py * resolution) + px;
+				let height_idx;
+				if (core.view.config.heightmapRotate)
+					height_idx = (resolution - 1 - px) * resolution + py;
+				else
+					height_idx = (py * resolution) + px;
+
 				heights[height_idx] = height;
 			}
 		}
@@ -955,6 +960,7 @@ module.exports = {
 				return this.$core.setToast('error', 'Invalid heightmap resolution selected.', null, -1);
 
 			const dir = ExportHelper.getExportPath(path.join('maps', selected_map_dir, 'heightmaps'));
+			const dir_alphamaps = ExportHelper.getExportPath(path.join('maps', selected_map_dir, 'alphamaps'));
 			const export_paths = this.$core.openLastExportStream();
 
 			this.$core.setToast('progress', 'Calculating height range across all tiles...', null, -1, false);
@@ -1009,6 +1015,12 @@ module.exports = {
 			const helper = new ExportHelper(export_tiles.length, 'heightmap');
 			helper.start();
 
+			// Load WDT once for all tiles
+			const prefix = util.format('world/maps/%s/%s', selected_map_dir, selected_map_dir);
+			const wdtFile = await this.$core.view.casc.getFileByName(prefix + '.wdt');
+			const wdt = new WDTLoader(wdtFile);
+			await wdt.load();
+
 			for (let i = 0; i < export_tiles.length; i++) {
 				const tile_index = export_tiles[i];
 
@@ -1027,6 +1039,32 @@ module.exports = {
 						continue;
 					}
 
+					// Export alpha maps for this tile
+					if (this.$core.view.config.exportMapQuality === -1 ) {
+						try {
+							const tile_prefix = prefix + '_' + adt.tileY + '_' + adt.tileX;
+	
+							const rootFileDataID = listfile.getByFilename(tile_prefix + '.adt');
+							const tex0FileDataID = listfile.getByFilename(tile_prefix + '_tex0.adt');
+	
+							const rootFile = await this.$core.view.casc.getFile(rootFileDataID);
+							const texFile = await this.$core.view.casc.getFile(tex0FileDataID);
+							
+							const rootAdt = new ADTLoader(rootFile);
+							rootAdt.loadRoot();
+							const texAdt = new ADTLoader(texFile);
+							texAdt.loadTex(wdt);
+	
+							const usePosix = this.$core.view.config.pathFormat === 'posix';
+							const isSplittingAlphaMaps = this.$core.view.config.splitAlphaMaps;
+	
+							await adt.exportAlphaMaps(dir_alphamaps, texAdt, rootAdt, usePosix, isSplittingAlphaMaps, export_resolution, helper);
+							log.write('exported alpha maps for tile %s', tile_id);
+						} catch (e) {
+							log.write('failed to export alpha maps for tile %s: %s', tile_id, e.message);
+						}
+					}
+					
 					const out_path = path.join(dir, filename);
 
 					const writer = new PNGWriter(export_resolution, export_resolution);
@@ -1117,6 +1155,7 @@ module.exports = {
 			}
 
 			export_paths?.close();
+			ADTExporter.clearCache();
 			helper.finish();
 		}
 	},

@@ -244,6 +244,13 @@ module.exports = {
 				</label>
 			</div>
 			<div>
+				<h1>Rotate Heightmap 90° clockwise</h1>
+				<label class="ui-checkbox">
+					<input type="checkbox" v-model="$core.view.configEdit.heightmapRotate"/>
+					<span>Enable</span>
+				</label>
+			</div>
+			<div>
 				<h1>Split Large Terrain Maps (Recommended)</h1>
 				<p>If enabled, exporting baked terrain above 8k will be split into smaller files rather than one large file.</p>
 				<label class="ui-checkbox">
