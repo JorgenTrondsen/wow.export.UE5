@@ -300,7 +300,7 @@ class ADTExporter {
 
 	/**
 	 * Export alpha maps for the ADT tile.
-	 * @param {string} dir Directory to export into
+	 * @param {string} dir Output directory
 	 * @param {ADTLoader} texAdt Texture ADT data
 	 * @param {ADTLoader} rootAdt Root ADT data
 	 * @param {boolean} usePosix Use POSIX path format
@@ -599,6 +599,219 @@ class ADTExporter {
 	}
 
 	/**
+	 * Export doodads (M2s), WMOs, and game objects for this ADT tile.
+	 * @param {string} dir - Output directory
+	 * @param {object} casc - CASC instance
+	 * @param {object} config - Configuration object
+	 * @param {object} objAdt - Object ADT data
+	 * @param {Set} gameObjects - Set of game objects to export
+	 * @param {object} helper - Export helper for progress tracking
+	 * @param {boolean} usePosix - Use POSIX path format
+	 * @param {boolean} isRawExport - Whether this is a raw export
+	 */
+	async exportDoodadsAndWMOs(dir, casc, config, objAdt, gameObjects, helper, usePosix, isRawExport) {
+		const objectCache = new Set();
+
+		const csvPath = path.join(dir, 'adt_' + this.tileID + '_ModelPlacementInformation.csv');
+		if (config.overwriteFiles || !await generics.fileExists(csvPath)) {
+			const csv = new CSVWriter(csvPath);
+			csv.addField('ModelFile', 'PositionX', 'PositionY', 'PositionZ', 'RotationX', 'RotationY', 'RotationZ', 'RotationW', 'ScaleFactor', 'ModelId', 'Type', 'FileDataID', 'DoodadSetIndexes', 'DoodadSetNames');
+
+			const exportObjects = async (exportType, objects, csvName) => {
+				const nObjects = objects?.length ?? objects.size;
+				log.write('Exporting %d %s for ADT...', nObjects, exportType);
+
+				helper.setCurrentTaskName('Tile ' + this.tileID + ', ' + exportType);
+				helper.setCurrentTaskMax(nObjects);
+
+				let index = 0;
+				for (const model of objects) {
+					helper.setCurrentTaskValue(index++);
+
+					const fileDataID = model.FileDataID ?? model.mmidEntry;
+					let fileName = listfile.getByID(fileDataID);
+
+					if (!isRawExport) {
+						if (fileName !== undefined) {
+							// Replace M2 extension with OBJ.
+							fileName = ExportHelper.replaceExtension(fileName, '.obj');
+						} else {
+							// Handle unknown file.
+							fileName = listfile.formatUnknownFile(fileDataID, '.obj');
+						}
+					}
+
+					let modelPath;
+					if (config.enableSharedChildren)
+						modelPath = ExportHelper.getExportPath(fileName);
+					else
+						modelPath = path.join(dir, path.basename(fileName));
+
+					try {
+						if (!objectCache.has(fileDataID)) {
+							const data = await casc.getFile(fileDataID);
+							const m2 = new M2Exporter(data, undefined, fileDataID);
+
+							if (isRawExport)
+								await m2.exportRaw(modelPath, helper);
+							else
+								await m2.exportAsOBJ(modelPath, config.modelsExportCollision, helper);
+							
+							// Abort if the export has been cancelled.
+							if (helper.isCancelled())
+								return;
+
+							objectCache.add(fileDataID);
+						}
+
+						let modelFile = path.relative(dir, modelPath);
+						if (usePosix)
+							modelFile = ExportHelper.win32ToPosix(modelFile);
+
+						csv.addRow({
+							ModelFile: modelFile,
+							PositionX: model.Position?.[0] ?? model.position[0],
+							PositionY: model.Position?.[1] ?? model.position[1],
+							PositionZ: model.Position?.[2] ?? model.position[2],
+							RotationX: model.Rotation?.[0] ?? model.rotation[0],
+							RotationY: model.Rotation?.[1] ?? model.rotation[1],
+							RotationZ: model.Rotation?.[2] ?? model.rotation[2],
+							RotationW: model.Rotation?.[3] ?? model.rotation[3],
+							ScaleFactor: model.scale !== undefined ? model.scale / 1024 : 1,
+							ModelId: model.uniqueId ?? 0,
+							Type: csvName,
+							FileDataID: fileDataID,
+							DoodadSetIndexes: 0,
+							DoodadSetNames: ''
+						});
+					} catch (e) {
+						log.write('Failed to export %s [%d]', fileName, fileDataID);
+						log.write('Error: %s', e);
+					}
+				}
+			};
+
+			if (config.mapsIncludeGameObjects === true && gameObjects !== undefined && gameObjects.size > 0)
+				await exportObjects('game objects', gameObjects, 'gobj');
+
+			if (config.mapsIncludeM2)
+				await exportObjects('doodads', objAdt.models, 'm2');
+
+			if (config.mapsIncludeWMO) {
+				log.write('Exporting %d WMOs for ADT...', objAdt.worldModels.length);
+
+				helper.setCurrentTaskName('Tile ' + this.tileID + ', WMO objects');
+				helper.setCurrentTaskMax(objAdt.worldModels.length);
+
+				const setNameCache = new Map();
+
+				let worldModelIndex = 0;
+				const usingNames = !!objAdt.wmoNames;
+				for (const model of objAdt.worldModels) {
+					const useADTSets = model & 0x80;
+					helper.setCurrentTaskValue(worldModelIndex++);
+
+					let fileDataID;
+					let fileName;
+
+					try {
+						if (usingNames) {
+							fileName = objAdt.wmoNames[objAdt.wmoOffsets[model.mwidEntry]];
+							fileDataID = listfile.getByFilename(fileName);
+						} else {
+							fileDataID = model.mwidEntry;
+							fileName = listfile.getByID(fileDataID);
+						}
+
+						if (!isRawExport) {
+							if (fileName !== undefined) {
+								// Replace WMO extension with OBJ.
+								fileName = ExportHelper.replaceExtension(fileName, '_set' + model.doodadSet + '.obj');
+							} else {
+								// Handle unknown WMO files.
+								fileName = listfile.formatUnknownFile(fileDataID, '_set' + model.doodadSet + '.obj');
+							}
+						}
+
+						let modelPath;
+						if (config.enableSharedChildren)
+							modelPath = ExportHelper.getExportPath(fileName);
+						else
+							modelPath = path.join(dir, path.basename(fileName));
+
+						const doodadSets = useADTSets ? objAdt.doodadSets : [model.doodadSet];
+						const cacheID = fileDataID + '-' + doodadSets.join(',');
+
+						if (!objectCache.has(cacheID)) {
+							const data = await casc.getFile(fileDataID);
+							const wmoLoader = new WMOExporter(data, fileDataID);
+
+							await wmoLoader.wmo.load();
+
+							setNameCache.set(fileDataID, wmoLoader.wmo.doodadSets.map(e => e.name));
+
+							if (config.mapsIncludeWMOSets) {
+								const mask = { 0: { checked: true } };
+								if (useADTSets) {
+									for (const setIndex of objAdt.doodadSets)
+										mask[setIndex] = { checked: true };
+								} else {
+									mask[model.doodadSet] = { checked: true };
+								}
+								
+								wmoLoader.setDoodadSetMask(mask);
+							}
+
+							if (isRawExport)
+								await wmoLoader.exportRaw(modelPath, helper);
+							else
+								await wmoLoader.exportAsOBJ(modelPath, helper);
+
+							// Abort if the export has been cancelled.
+							if (helper.isCancelled())
+								return;
+
+							objectCache.add(cacheID);
+						}
+
+						const doodadNames = setNameCache.get(fileDataID);
+
+						let modelFile = path.relative(dir, modelPath);
+						if (usePosix)
+							modelFile = ExportHelper.win32ToPosix(modelFile);
+
+						csv.addRow({
+							ModelFile: modelFile,
+							PositionX: model.position[0],
+							PositionY: model.position[1],
+							PositionZ: model.position[2],
+							RotationX: model.rotation[0],
+							RotationY: model.rotation[1],
+							RotationZ: model.rotation[2],
+							RotationW: 0,
+							ScaleFactor: model.scale / 1024,
+							ModelId: model.uniqueId,
+							Type: 'wmo',
+							FileDataID: fileDataID,
+							DoodadSetIndexes: doodadSets.join(','),
+							DoodadSetNames: doodadSets.map(e => doodadNames[e]).join(',')
+						});
+					} catch (e) {
+						log.write('Failed to export %s [%d]', fileName, fileDataID);
+						log.write('Error: %s', e);
+					}
+				}
+
+				WMOExporter.clearCache();
+			}
+
+			await csv.write();
+		} else {
+			log.write('Skipping model placement export %s (file exists, overwrite disabled)', csvPath);
+		}
+	}
+
+	/**
 	 * Export the ADT tile.
 	 * @param {string} dir Directory to export the tile into.
 	 * @param {number} textureRes
@@ -886,7 +1099,7 @@ class ADTExporter {
 			if (quality !== 0) {
 				if (isAlphaMaps) {
 					// Export alpha maps.
-					await this.exportAlphaMaps(dir, texAdt, rootAdt, usePosix, isSplittingAlphaMaps, null, helper);
+					await this.exportAlphaMaps(dir, texAdt, rootAdt, usePosix, isSplittingAlphaMaps, undefined, helper);
 				} else if (quality <= 512) {
 					// Use minimaps for cheap textures.
 					const paddedX = this.tileY.toString().padStart(2, '0');
@@ -1228,207 +1441,8 @@ class ADTExporter {
 		}
 
 		// Export dooads / WMOs.
-		if (config.mapsIncludeWMO || config.mapsIncludeM2 || config.mapsIncludeGameObjects) {
-			const objectCache = new Set();
-
-			const csvPath = path.join(dir, 'adt_' + this.tileID + '_ModelPlacementInformation.csv');
-			if (config.overwriteFiles || !await generics.fileExists(csvPath)) {
-				const csv = new CSVWriter(csvPath);
-				csv.addField('ModelFile', 'PositionX', 'PositionY', 'PositionZ', 'RotationX', 'RotationY', 'RotationZ', 'RotationW', 'ScaleFactor', 'ModelId', 'Type', 'FileDataID', 'DoodadSetIndexes', 'DoodadSetNames');
-
-				const exportObjects = async (exportType, objects, csvName) => {
-					const nObjects = objects?.length ?? objects.size;
-					log.write('Exporting %d %s for ADT...', nObjects, exportType);
-
-					helper.setCurrentTaskName('Tile ' + this.tileID + ', ' + exportType);
-					helper.setCurrentTaskMax(nObjects);
-
-					let index = 0;
-					for (const model of objects) {
-						helper.setCurrentTaskValue(index++);
-
-						const fileDataID = model.FileDataID ?? model.mmidEntry;
-						let fileName = listfile.getByID(fileDataID);
-
-						if (!isRawExport) {
-							if (fileName !== undefined) {
-								// Replace M2 extension with OBJ.
-								fileName = ExportHelper.replaceExtension(fileName, '.obj');
-							} else {
-								// Handle unknown file.
-								fileName = listfile.formatUnknownFile(fileDataID, '.obj');
-							}
-						}
-
-						let modelPath;
-						if (config.enableSharedChildren)
-							modelPath = ExportHelper.getExportPath(fileName);
-						else
-							modelPath = path.join(dir, path.basename(fileName));
-
-						try {
-							if (!objectCache.has(fileDataID)) {
-								const data = await casc.getFile(fileDataID);
-								const m2 = new M2Exporter(data, undefined, fileDataID);
-
-								if (isRawExport)
-									await m2.exportRaw(modelPath, helper);
-								else
-									await m2.exportAsOBJ(modelPath, config.modelsExportCollision, helper);
-								
-								// Abort if the export has been cancelled.
-								if (helper.isCancelled())
-									return;
-
-								objectCache.add(fileDataID);
-							}
-
-							let modelFile = path.relative(dir, modelPath);
-							if (usePosix)
-								modelFile = ExportHelper.win32ToPosix(modelFile);
-
-							csv.addRow({
-								ModelFile: modelFile,
-								PositionX: model.Position?.[0] ?? model.position[0],
-								PositionY: model.Position?.[1] ?? model.position[1],
-								PositionZ: model.Position?.[2] ?? model.position[2],
-								RotationX: model.Rotation?.[0] ?? model.rotation[0],
-								RotationY: model.Rotation?.[1] ?? model.rotation[1],
-								RotationZ: model.Rotation?.[2] ?? model.rotation[2],
-								RotationW: model.Rotation?.[3] ?? model.rotation[3],
-								ScaleFactor: model.scale !== undefined ? model.scale / 1024 : 1,
-								ModelId: model.uniqueId ?? 0,
-								Type: csvName,
-								FileDataID: fileDataID,
-								DoodadSetIndexes: 0,
-								DoodadSetNames: ''
-							});
-						} catch (e) {
-							log.write('Failed to export %s [%d]', fileName, fileDataID);
-							log.write('Error: %s', e);
-						}
-					}
-				};
-
-				if (config.mapsIncludeGameObjects === true && gameObjects !== undefined && gameObjects.size > 0)
-					await exportObjects('game objects', gameObjects, 'gobj');
-
-				if (config.mapsIncludeM2)
-					await exportObjects('doodads', objAdt.models, 'm2');
-
-				if (config.mapsIncludeWMO) {
-					log.write('Exporting %d WMOs for ADT...', objAdt.worldModels.length);
-
-					helper.setCurrentTaskName('Tile ' + this.tileID + ', WMO objects');
-					helper.setCurrentTaskMax(objAdt.worldModels.length);
-
-					const setNameCache = new Map();
-
-					let worldModelIndex = 0;
-					const usingNames = !!objAdt.wmoNames;
-					for (const model of objAdt.worldModels) {
-						const useADTSets = model & 0x80;
-						helper.setCurrentTaskValue(worldModelIndex++);
-
-						let fileDataID;
-						let fileName;
-
-						try {
-							if (usingNames) {
-								fileName = objAdt.wmoNames[objAdt.wmoOffsets[model.mwidEntry]];
-								fileDataID = listfile.getByFilename(fileName);
-							} else {
-								fileDataID = model.mwidEntry;
-								fileName = listfile.getByID(fileDataID);
-							}
-
-							if (!isRawExport) {
-								if (fileName !== undefined) {
-									// Replace WMO extension with OBJ.
-									fileName = ExportHelper.replaceExtension(fileName, '_set' + model.doodadSet + '.obj');
-								} else {
-									// Handle unknown WMO files.
-									fileName = listfile.formatUnknownFile(fileDataID, '_set' + model.doodadSet + '.obj');
-								}
-							}
-
-							let modelPath;
-							if (config.enableSharedChildren)
-								modelPath = ExportHelper.getExportPath(fileName);
-							else
-								modelPath = path.join(dir, path.basename(fileName));
-
-							const doodadSets = useADTSets ? objAdt.doodadSets : [model.doodadSet];
-							const cacheID = fileDataID + '-' + doodadSets.join(',');
-
-							if (!objectCache.has(cacheID)) {
-								const data = await casc.getFile(fileDataID);
-								const wmoLoader = new WMOExporter(data, fileDataID);
-
-								await wmoLoader.wmo.load();
-
-								setNameCache.set(fileDataID, wmoLoader.wmo.doodadSets.map(e => e.name));
-
-								if (config.mapsIncludeWMOSets) {
-									const mask = { 0: { checked: true } };
-									if (useADTSets) {
-										for (const setIndex of objAdt.doodadSets)
-											mask[setIndex] = { checked: true };
-									} else {
-										mask[model.doodadSet] = { checked: true };
-									}
-									
-									wmoLoader.setDoodadSetMask(mask);
-								}
-
-								if (isRawExport)
-									await wmoLoader.exportRaw(modelPath, helper);
-								else
-									await wmoLoader.exportAsOBJ(modelPath, helper);
-
-								// Abort if the export has been cancelled.
-								if (helper.isCancelled())
-									return;
-
-								objectCache.add(cacheID);
-							}
-
-							const doodadNames = setNameCache.get(fileDataID);
-
-							let modelFile = path.relative(dir, modelPath);
-							if (usePosix)
-								modelFile = ExportHelper.win32ToPosix(modelFile);
-
-							csv.addRow({
-								ModelFile: modelFile,
-								PositionX: model.position[0],
-								PositionY: model.position[1],
-								PositionZ: model.position[2],
-								RotationX: model.rotation[0],
-								RotationY: model.rotation[1],
-								RotationZ: model.rotation[2],
-								RotationW: 0,
-								ScaleFactor: model.scale / 1024,
-								ModelId: model.uniqueId,
-								Type: 'wmo',
-								FileDataID: fileDataID,
-								DoodadSetIndexes: doodadSets.join(','),
-								DoodadSetNames: doodadSets.map(e => doodadNames[e]).join(',')
-							});
-						} catch (e) {
-							log.write('Failed to export %s [%d]', fileName, fileDataID);
-							log.write('Error: %s', e);
-						}
-					}
-
-					WMOExporter.clearCache();
-				}
-
-				await csv.write();
-			} else {
-				log.write('Skipping model placement export %s (file exists, overwrite disabled)', csvPath);
-			}
-		}
+		if (config.mapsIncludeWMO || config.mapsIncludeM2 || config.mapsIncludeGameObjects)
+			await this.exportDoodadsAndWMOs(dir, casc, config, objAdt, gameObjects, helper, usePosix, isRawExport);
 
 		// Export liquids.
 		if (config.mapsIncludeLiquid && rootAdt.liquidChunks) {

@@ -959,8 +959,7 @@ module.exports = {
 			if (export_resolution <= 0)
 				return this.$core.setToast('error', 'Invalid heightmap resolution selected.', null, -1);
 
-			const dir = ExportHelper.getExportPath(path.join('maps', selected_map_dir, 'heightmaps'));
-			const dir_alphamaps = ExportHelper.getExportPath(path.join('maps', selected_map_dir, 'alphamaps'));
+			const dir = ExportHelper.getExportPath(path.join('maps', selected_map_dir));
 			const export_paths = this.$core.openLastExportStream();
 
 			this.$core.setToast('progress', 'Calculating height range across all tiles...', null, -1, false);
@@ -1038,34 +1037,60 @@ module.exports = {
 						helper.mark(`heightmap_${tile_id}.png`, false, 'no height data available');
 						continue;
 					}
+					
+					const tile_prefix = prefix + '_' + adt.tileY + '_' + adt.tileX;
+
+					const rootFileDataID = listfile.getByFilename(tile_prefix + '.adt');
+					const tex0FileDataID = listfile.getByFilename(tile_prefix + '_tex0.adt');
+					const obj0FileDataID = listfile.getByFilename(tile_prefix + '_obj0.adt');
+
+					const rootFile = await this.$core.view.casc.getFile(rootFileDataID);
+					const texFile = await this.$core.view.casc.getFile(tex0FileDataID);
+					const objFile = await this.$core.view.casc.getFile(obj0FileDataID);
+
+					const rootAdt = new ADTLoader(rootFile);
+					rootAdt.loadRoot();
+					const texAdt = new ADTLoader(texFile);
+					texAdt.loadTex(wdt);
+					const objAdt = new ADTLoader(objFile);
+					objAdt.loadObj();
+
+					const usePosix = this.$core.view.config.pathFormat === 'posix';
 
 					// Export alpha maps for this tile
 					if (this.$core.view.config.exportMapQuality === -1 ) {
-						try {
-							const tile_prefix = prefix + '_' + adt.tileY + '_' + adt.tileX;
-	
-							const rootFileDataID = listfile.getByFilename(tile_prefix + '.adt');
-							const tex0FileDataID = listfile.getByFilename(tile_prefix + '_tex0.adt');
-	
-							const rootFile = await this.$core.view.casc.getFile(rootFileDataID);
-							const texFile = await this.$core.view.casc.getFile(tex0FileDataID);
-							
-							const rootAdt = new ADTLoader(rootFile);
-							rootAdt.loadRoot();
-							const texAdt = new ADTLoader(texFile);
-							texAdt.loadTex(wdt);
-	
-							const usePosix = this.$core.view.config.pathFormat === 'posix';
-							const isSplittingAlphaMaps = this.$core.view.config.splitAlphaMaps;
-	
-							await adt.exportAlphaMaps(dir_alphamaps, texAdt, rootAdt, usePosix, isSplittingAlphaMaps, export_resolution, helper);
+						try {	
+							await adt.exportAlphaMaps(path.join(dir, 'alphamaps'), texAdt, rootAdt, usePosix, this.$core.view.config.splitAlphaMaps, export_resolution, helper);
 							log.write('exported alpha maps for tile %s', tile_id);
 						} catch (e) {
 							log.write('failed to export alpha maps for tile %s: %s', tile_id, e.message);
 						}
 					}
+
+					// Export doodads / WMOs
+					if (this.$core.view.config.mapsIncludeWMO || this.$core.view.config.mapsIncludeM2 || this.$core.view.config.mapsIncludeGameObjects) {
+						try {
+							let game_objects = undefined;
+							if (this.$core.view.config.mapsIncludeGameObjects === true) {
+								const start_x = MAP_OFFSET - (adt.tileX * TILE_SIZE) - TILE_SIZE;
+								const start_y = MAP_OFFSET - (adt.tileY * TILE_SIZE) - TILE_SIZE;
+								const end_x = start_x + TILE_SIZE;
+								const end_y = start_y + TILE_SIZE;
+
+								game_objects = await collect_game_objects(selected_map_id, obj => {
+									const [posX, posY] = obj.Pos;
+									return posX > start_x && posX < end_x && posY > start_y && posY < end_y;
+								});
+							}
+
+							await adt.exportDoodadsAndWMOs(dir, this.$core.view.casc, this.$core.view.config, objAdt, game_objects, helper, usePosix, this.$core.view.config.exportMapFormat === 'RAW');
+							log.write('exported doodads/WMOs for tile %s', tile_id);
+						} catch (e) {
+							log.write('failed to export doodads/WMOs for tile %s: %s', tile_id, e.message);
+						}
+					}
 					
-					const out_path = path.join(dir, filename);
+					const out_path = path.join(dir, 'heightmaps', filename);
 
 					const writer = new PNGWriter(export_resolution, export_resolution);
 					const bit_depth = this.$core.view.config.heightmapBitDepth;
@@ -1133,7 +1158,7 @@ module.exports = {
 
 			// Write metadata file
 			try {
-				const metadataPath = path.join(dir, 'heightmap_metadata.json');
+				const metadataPath = path.join(dir, 'heightmaps', 'heightmap_metadata.json');
 				const metadataWriter = new FileWriter(metadataPath);
 				
 				const metadata = {
