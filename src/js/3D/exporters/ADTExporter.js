@@ -567,27 +567,49 @@ class ADTExporter {
 					}
 				}
 
-				// save the combined image
 				const imageSuffix = imageIndex === 0 ? '' : '_' + imageIndex;
 				const mergedPath = path.join(dir, 'tex_' + this.tileID + imageSuffix + '.png');
 				
 				// Downsample to requested resolution if specified
 				const defaultSize = 64 * 16;
 				if (resolution && resolution !== defaultSize) {
+					const nearestPowerOf2 = Math.pow(2, Math.ceil(Math.log2(resolution)));
 					const canvas = new OffscreenCanvas(defaultSize, defaultSize);
-					const ctx = canvas.getContext('2d');
-					const imageData = new ImageData(new Uint8ClampedArray(pixelData), defaultSize, defaultSize);
-					ctx.putImageData(imageData, 0, 0);
+					canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixelData), defaultSize, defaultSize), 0, 0);
 					
-					const scaled = new OffscreenCanvas(resolution, resolution);
-					scaled.getContext('2d').drawImage(canvas, 0, 0, resolution, resolution);
+					const scaled = new OffscreenCanvas(nearestPowerOf2, nearestPowerOf2);
+					scaled.getContext('2d').drawImage(canvas, 0, 0, nearestPowerOf2, nearestPowerOf2);
+					
+					if (resolution !== nearestPowerOf2) {
+						const imageData = scaled.getContext('2d').getImageData(0, 0, nearestPowerOf2, nearestPowerOf2);
+						const skipIdx = Math.floor(resolution / 2);
+						
+						const final = new OffscreenCanvas(resolution, resolution);
+						const finalData = final.getContext('2d').createImageData(resolution, resolution);
+						
+						// Copy pixels, skipping center row and column from source
+						for (let y = 0; y < resolution; y++) {
+							const srcY = (y < skipIdx ? y : y + 1) * nearestPowerOf2;
+							const dstY = y * resolution;
+							for (let x = 0; x < resolution; x++) {
+								const srcIdx = (srcY + (x < skipIdx ? x : x + 1)) * 4;
+								const dstIdx = (dstY + x) * 4;
+								finalData.data[dstIdx + 0] = imageData.data[srcIdx + 0];
+								finalData.data[dstIdx + 1] = imageData.data[srcIdx + 1];
+								finalData.data[dstIdx + 2] = imageData.data[srcIdx + 2];
+								finalData.data[dstIdx + 3] = imageData.data[srcIdx + 3];
+							}
+						}
+						
+						final.getContext('2d').putImageData(finalData, 0, 0);
+						scaled = final;
+					}
 					
 					await (await BufferWrapper.fromCanvas(scaled, 'image/png')).writeToFile(mergedPath);
 				} else {
 					await pngWriter.write(mergedPath);
 				}
 			}
-			// write json metadata
 			const json = new JSONWriter(path.join(dir, 'tex_' + this.tileID + '.json'));
 			json.addProperty('layers', layers);
 

@@ -228,7 +228,7 @@ const extract_height_data_from_tile = async (adt, resolution) => {
 		}
 
 		const heights = new Float32Array(resolution * resolution);
-		const effective_res = resolution > 1 ? resolution - 1 : 1;
+		const effective_res = resolution - 1;
 
 		for (let py = 0; py < resolution; py++) {
 			for (let px = 0; px < resolution; px++) {
