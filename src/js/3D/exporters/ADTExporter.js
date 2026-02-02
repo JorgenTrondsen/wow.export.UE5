@@ -577,7 +577,7 @@ class ADTExporter {
 					const canvas = new OffscreenCanvas(defaultSize, defaultSize);
 					canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixelData), defaultSize, defaultSize), 0, 0);
 					
-					const scaled = new OffscreenCanvas(nearestPowerOf2, nearestPowerOf2);
+					let scaled = new OffscreenCanvas(nearestPowerOf2, nearestPowerOf2);
 					scaled.getContext('2d').drawImage(canvas, 0, 0, nearestPowerOf2, nearestPowerOf2);
 					
 					if (resolution !== nearestPowerOf2) {
@@ -830,6 +830,113 @@ class ADTExporter {
 			await csv.write();
 		} else {
 			log.write('Skipping model placement export %s (file exists, overwrite disabled)', csvPath);
+		}
+	}
+
+	/**
+	 * Export foliage for this ADT tile.
+	 * @param {string} dir - Output directory
+	 * @param {object} casc - CASC instance
+	 * @param {object} config - Configuration object
+	 * @param {object} texAdt - Texture ADT data
+	 * @param {object} helper - Export helper for progress tracking
+	 * @param {boolean} isRawExport - Whether this is a raw export
+	 */
+	async exportFoliage(dir, casc, config, texAdt, helper, isRawExport) {
+		// Prepare foliage data tables if needed.
+		if (!hasLoadedFoliage)
+			await loadFoliageTables();
+
+		// Export foliage.
+		if (!isFoliageAvailable)
+			return;
+
+		const foliageExportCache = new Set();
+		const foliageEffectCache = new Set();
+		const foliageDir = path.join(dir, 'foliage');
+		
+		log.write('Exporting foliage to %s', foliageDir);
+
+		for (const chunk of texAdt.texChunks) {
+			// Skip chunks that have no layers?
+			if (!chunk.layers)
+				continue;
+
+			for (const layer of chunk.layers) {
+				// Skip layers with no effect.
+				if (!layer.effectID)
+					continue;
+
+				const groundEffectTexture = await dbTextures.getRow(layer.effectID);
+				if (!groundEffectTexture || !Array.isArray(groundEffectTexture.DoodadID))
+					continue;
+
+				// Create a foliage metadata JSON packed with the table data.
+				let foliageJSON;
+				if (config.exportFoliageMeta && !foliageEffectCache.has(layer.effectID)) {
+					foliageJSON = new JSONWriter(path.join(foliageDir, 'layerinfo' + layer.effectID + '.json'));
+					foliageJSON.data = groundEffectTexture;
+
+					foliageEffectCache.add(layer.effectID);
+				}
+
+				const doodadModelIDs = {};
+				for (const doodadEntryID of groundEffectTexture.DoodadID) {
+					// Skip empty fields.
+					if (!doodadEntryID)
+						continue;
+
+					const groundEffectDoodad = await dbDoodads.getRow(doodadEntryID);
+					if (groundEffectDoodad) {
+						const modelID = groundEffectDoodad.ModelFileID;
+						doodadModelIDs[doodadEntryID] = { fileDataID: modelID };
+						if (!modelID || foliageExportCache.has(modelID))
+							continue;
+
+						foliageExportCache.add(modelID);
+					}
+				}
+
+				if (foliageJSON) {
+					// Map fileDataID to the exported OBJ file names.
+					for (const entry of Object.values(doodadModelIDs)) {
+						const fileName = listfile.getByID(entry.fileDataID);
+
+						if (isRawExport)
+							entry.fileName = path.basename(fileName);
+						else
+							entry.fileName = ExportHelper.replaceExtension(path.basename(fileName), '.obj');
+					}
+
+					foliageJSON.addProperty('DoodadModelIDs', doodadModelIDs);
+					await foliageJSON.write();
+				}
+			}
+		}
+
+		helper.setCurrentTaskName('Tile ' + this.tileID + ', foliage doodads');
+		helper.setCurrentTaskMax(foliageExportCache.size);
+
+		// Export foliage after collecting to give an accurate progress count.
+		let foliageIndex = 0;
+		for (const modelID of foliageExportCache) {
+			helper.setCurrentTaskValue(foliageIndex++);
+			
+			const modelName = path.basename(listfile.getByID(modelID));
+			
+			const data = await casc.getFile(modelID);
+			const m2 = new M2Exporter(data, undefined, modelID);
+
+			if (isRawExport) {
+				await m2.exportRaw(path.join(foliageDir, modelName), helper);
+			} else {
+				const modelPath = ExportHelper.replaceExtension(modelName, '.obj');
+				await m2.exportAsOBJ(path.join(foliageDir, modelPath), config.modelsExportCollision, helper);
+			}
+
+			// Abort if the export has been cancelled.
+			if (helper.isCancelled())
+				return;
 		}
 	}
 
@@ -1508,100 +1615,9 @@ class ADTExporter {
 			await liquidJSON.write();
 		}
 
-		// Prepare foliage data tables if needed.
-		if (config.mapsIncludeFoliage && !hasLoadedFoliage)
-			await loadFoliageTables();
-
 		// Export foliage.
-		if (config.mapsIncludeFoliage && isFoliageAvailable) {
-			const foliageExportCache = new Set();
-			const foliageEffectCache = new Set();
-			const foliageDir = path.join(dir, 'foliage');
-			
-			log.write('Exporting foliage to %s', foliageDir);
-
-			for (const chunk of texAdt.texChunks) {
-				// Skip chunks that have no layers?
-				if (!chunk.layers)
-					continue;
-
-				for (const layer of chunk.layers) {
-					// Skip layers with no effect.
-					if (!layer.effectID)
-						continue;
-
-					const groundEffectTexture = await dbTextures.getRow(layer.effectID);
-					if (!groundEffectTexture || !Array.isArray(groundEffectTexture.DoodadID))
-						continue;
-
-					// Create a foliage metadata JSON packed with the table data.
-					let foliageJSON;
-					if (core.view.config.exportFoliageMeta && !foliageEffectCache.has(layer.effectID)) {
-						foliageJSON = new JSONWriter(path.join(foliageDir, layer.effectID + '.json'));
-						foliageJSON.data = groundEffectTexture;
-
-						foliageEffectCache.add(layer.effectID);
-					}
-
-					const doodadModelIDs = {};
-					for (const doodadEntryID of groundEffectTexture.DoodadID) {
-						// Skip empty fields.
-						if (!doodadEntryID)
-							continue;
-
-						const groundEffectDoodad = await dbDoodads.getRow(doodadEntryID);
-						if (groundEffectDoodad) {
-							const modelID = groundEffectDoodad.ModelFileID;
-							doodadModelIDs[doodadEntryID] = { fileDataID: modelID };
-							if (!modelID || foliageExportCache.has(modelID))
-								continue;
-
-							foliageExportCache.add(modelID);
-						}
-					}
-
-					if (foliageJSON) {
-						// Map fileDataID to the exported OBJ file names.
-						for (const entry of Object.values(doodadModelIDs)) {
-							const fileName = listfile.getByID(entry.fileDataID);
-
-							if (isRawExport)
-								entry.fileName = path.basename(fileName);
-							else
-								entry.fileName = ExportHelper.replaceExtension(path.basename(fileName), '.obj');
-						}
-
-						foliageJSON.addProperty('DoodadModelIDs', doodadModelIDs);
-						await foliageJSON.write();
-					}
-				}
-			}
-
-			helper.setCurrentTaskName('Tile ' + this.tileID + ', foliage doodads');
-			helper.setCurrentTaskMax(foliageExportCache.size);
-
-			// Export foliage after collecting to give an accurate progress count.
-			let foliageIndex = 0;
-			for (const modelID of foliageExportCache) {
-				helper.setCurrentTaskValue(foliageIndex++);
-				
-				const modelName = path.basename(listfile.getByID(modelID));
-				
-				const data = await casc.getFile(modelID);
-				const m2 = new M2Exporter(data, undefined, modelID);
-
-				if (isRawExport) {
-					await m2.exportRaw(path.join(foliageDir, modelName), helper);
-				} else {
-					const modelPath = ExportHelper.replaceExtension(modelName, '.obj');
-					await m2.exportAsOBJ(path.join(foliageDir, modelPath), config.modelsExportCollision, helper);
-				}
-
-				// Abort if the export has been cancelled.
-				if (helper.isCancelled())
-					return;
-			}
-		}
+		if (config.mapsIncludeFoliage)
+			await this.exportFoliage(dir, casc, config, texAdt, helper, isRawExport);
 
 		return out;
 	}

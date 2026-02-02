@@ -17,7 +17,7 @@ const WMOExporter = require('../3D/exporters/WMOExporter');
 const WMOLoader = require('../3D/loaders/WMOLoader');
 const TiledPNGWriter = require('../tiled-png-writer');
 const PNGWriter = require('../png-writer');
-const FileWriter = require('../file-writer');
+const JSONWriter = require('../3D/writers/JSONWriter');
 
 const TILE_SIZE = constants.GAME.TILE_SIZE;
 const MAP_OFFSET = constants.GAME.MAP_OFFSET;
@@ -1089,7 +1089,17 @@ module.exports = {
 							log.write('failed to export doodads/WMOs for tile %s: %s', tile_id, e.message);
 						}
 					}
-					
+
+					// Export foliage
+					if (this.$core.view.config.mapsIncludeFoliage) {
+						try {
+							await adt.exportFoliage(dir, this.$core.view.casc, this.$core.view.config, texAdt, helper, this.$core.view.config.exportMapFormat === 'RAW');
+							log.write('exported foliage for tile %s', tile_id);
+						} catch (e) {
+							log.write('failed to export foliage for tile %s: %s', tile_id, e.message);
+						}
+					}
+										
 					const out_path = path.join(dir, 'heightmaps', filename);
 
 					const writer = new PNGWriter(export_resolution, export_resolution);
@@ -1156,28 +1166,20 @@ module.exports = {
 				}
 			}
 
-			// Write metadata file
-			try {
-				const metadataPath = path.join(dir, 'heightmaps', 'heightmap_metadata.json');
-				const metadataWriter = new FileWriter(metadataPath);
-				
-				const metadata = {
-					height_data: {
-						range: global_max_height - global_min_height,
-						normalized_sealevel: (0 - global_min_height) / (global_max_height - global_min_height),
-					},
-					tile_data: {
-						columns: max_tileY + 1,
-						rows: max_tileX + 1,
-					}
-				};
-				
-				await metadataWriter.writeLine(JSON.stringify(metadata, null, 2));
-				metadataWriter.close();
-
-			} catch (e) {
-				helper.mark('heightmap metadata', false, e.message, e.stack);
-			}
+			// Write heightmap metadata
+			const heightmapJSON = new JSONWriter(path.join(dir, 'heightmaps/heightmap.json'));
+			const metadata = {
+				height_data: {
+					range: global_max_height - global_min_height,
+					normalized_sealevel: (0 - global_min_height) / (global_max_height - global_min_height),
+				},
+				tile_data: {
+					columns: max_tileY + 1,
+					rows: max_tileX + 1,
+				}
+			};
+			heightmapJSON.data = metadata;
+			await heightmapJSON.write();
 
 			export_paths?.close();
 			ADTExporter.clearCache();
