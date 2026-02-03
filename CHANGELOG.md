@@ -1,4 +1,11 @@
-## 0.2.9
+## 0.2.11
+- Fixed an issue that would cause an error when exporting models with "Textures" disabled.
+
+## 0.2.10 (02-02-2026)
+- Added support for the new WoW Classic: TBC Anniversary product.
+- Fixed a crash updating the Blender addon from the "update available" notification.
+
+## 0.2.9 (31-01-2026)
 - Added character hand-grip posing when holding weapons.
 - Added a "Show Base Map" option to zone map exports to allow for overlay-only exports. 
 - Fixed an animation loading priority bug for races with inherited animations.
