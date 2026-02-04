@@ -156,12 +156,20 @@ module.exports = {
 				<input type="number" min="1" max="100" v-model.number="$core.view.configEdit.exportWebPQuality"/>
 			</div>
 			<div>
-				<h1>Export Model Collision</h1>
-				<p>If enabled, M2 models exported as OBJ will also have their collision exported into a .phys.obj file.</p>
-				<label class="ui-checkbox">
-					<input type="checkbox" v-model="$core.view.configEdit.modelsExportCollision"/>
-					<span>Enable</span>
-				</label>
+    			<h1>Export Model Collision</h1>
+    			<p>If enabled, M2 models exported as OBJ will also have their collision exported into a .phys.obj file.</p>
+    			<label class="ui-checkbox">
+        			<input type="checkbox" v-model="$core.view.configEdit.modelsExportCollision"/>
+        			<span>Enable</span>
+    			</label>
+    			<div v-if="$core.view.configEdit.modelsExportCollision" style="margin-top: 5px; padding-left: 20px;">
+        			<h1>Export Foliage Collision</h1>
+        			<p>If enabled, foliage collision data will also be included in the export.</p>
+        			<label class="ui-checkbox">
+            			<input type="checkbox" v-model="$core.view.configEdit.modelsExportFoliageCollision"/>
+            			<span>Enable</span>
+        			</label>
+    			</div>
 			</div>
 			<div>
 				<h1>Export Additional UV Layers</h1>

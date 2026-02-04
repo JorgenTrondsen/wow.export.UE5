@@ -931,7 +931,7 @@ class ADTExporter {
 				await m2.exportRaw(path.join(foliageDir, modelName), helper);
 			} else {
 				const modelPath = ExportHelper.replaceExtension(modelName, '.obj');
-				await m2.exportAsOBJ(path.join(foliageDir, modelPath), config.modelsExportCollision, helper);
+				await m2.exportAsOBJ(path.join(foliageDir, modelPath), config.modelsExportCollision && config.modelsExportFoliageCollision, helper);
 			}
 
 			// Abort if the export has been cancelled.

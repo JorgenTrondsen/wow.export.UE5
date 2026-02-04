@@ -63,6 +63,7 @@
 	"modelViewerShowBones": false,
 	"modelViewerShowTextures": true,
 	"modelsExportCollision": false,
+	"modelsExportFoliageCollision": false,
 	"modelsExportPngIncrements": true,
 	"modelsExportSkin": false,
 	"modelsExportSkel": false,
