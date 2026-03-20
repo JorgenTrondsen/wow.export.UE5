@@ -211,6 +211,39 @@ document.addEventListener('click', function(e) {
 			},
 
 			/**
+			 * Mark all creature geosets to the given state.
+			 * @param {boolean} state
+			 */
+			setAllCreatureGeosets: function(state) {
+				if (this.creatureViewerGeosets) {
+					for (const node of this.creatureViewerGeosets)
+						node.checked = state;
+				}
+			},
+
+			/**
+			 * Mark all creature equipment toggles to the given state.
+			 * @param {boolean} state
+			 */
+			setAllCreatureEquipment: function(state) {
+				if (this.creatureViewerEquipment) {
+					for (const node of this.creatureViewerEquipment)
+						node.checked = state;
+				}
+			},
+
+			/**
+			 * Mark all creature WMO groups to the given state.
+			 * @param {boolean} state
+			 */
+			setAllCreatureWMOGroups: function(state) {
+				if (this.creatureViewerWMOGroups) {
+					for (const node of this.creatureViewerWMOGroups)
+						node.checked = state;
+				}
+			},
+
+			/**
 			 * Toggle UV layer for the main model viewer.
 			 * @param {string} layerName
 			 */
@@ -227,6 +260,27 @@ document.addEventListener('click', function(e) {
 				if (geosets) {
 					for (const node of geosets)
 						node.checked = state;
+				}
+			},
+
+			/**
+			 * Mark all decor category subcategories to the given state.
+			 * @param {boolean} state
+			 */
+			setAllDecorCategories: function(state) {
+				for (const entry of this.decorCategoryMask)
+					entry.checked = state;
+			},
+
+			/**
+			 * Mark all subcategories within a category group to the given state.
+			 * @param {number} category_id
+			 * @param {boolean} state
+			 */
+			setDecorCategoryGroup: function(category_id, state) {
+				for (const entry of this.decorCategoryMask) {
+					if (entry.categoryID === category_id)
+						entry.checked = state;
 				}
 			},
 

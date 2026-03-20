@@ -356,15 +356,13 @@ class WMOExporter {
 	 * @param {ExportHelper} helper
 	 * @param {Array} fileManifest
 	 */
-	async exportAsOBJ(out, helper, fileManifest) {
-		const config = core.view.config;
-
-		// check if split mode enabled
-		if (config.modelsExportSplitWMOGroups) {
+	async exportAsOBJ(out, helper, fileManifest, split_groups = false) {
+		if (split_groups) {
 			await this.exportGroupsAsSeparateOBJ(out, helper, fileManifest);
 			return;
 		}
 
+		const config = core.view.config;
 		const casc = core.view.casc;
 		const obj = new OBJWriter(out);
 		const mtl = new MTLWriter(ExportHelper.replaceExtension(out, '.mtl'));

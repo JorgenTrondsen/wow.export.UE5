@@ -288,6 +288,12 @@ module.exports = {
 				<input type="number" v-model.number="$core.view.configEdit.cacheExpiry"/>
 			</div>
 			<div>
+				<h1>CDN Fallback Hosts</h1>
+				<p>Comma-separated list of additional CDN hostnames to try when official CDN servers are unavailable or slow.</p>
+				<p>These are pinged alongside official servers and used based on speed and availability.</p>
+				<p><input type="text" class="long" v-model.trim="$core.view.configEdit.cdnFallbackHosts"/></p>
+			</div>
+			<div>
 				<h1>Manually Clear Cache (Requires Restart)</h1>
 				<p>While housekeeping on the cache is mostly automatic, sometimes clearing manually can resolve issues.</p>
 				<input type="button" class="spaced" :value="'Clear Cache (' + cache_size_formatted + ')'" @click="handle_cache_clear" :class="{ disabled: $core.view.isBusy }"/>
@@ -350,6 +356,14 @@ module.exports = {
 				<p>Remote URL used to obtain DBD manifest information. (Must use same format)</p>
 				<p>Primary <input type="text" class="long" v-model.trim="$core.view.configEdit.dbdFilenameURL"/></p>
 				<p>Fallback <input type="text" class="long" v-model.trim="$core.view.configEdit.dbdFilenameFallbackURL" /></p>
+			</div>
+			<div>
+				<h1>Allow Cache Collection</h1>
+				<p>If enabled, wow.export will anonymously collect cache data from your client for community usage.</p>
+				<label class="ui-checkbox">
+					<input type="checkbox" v-model="$core.view.configEdit.allowCacheCollection"/>
+					<span>Enable</span>
+				</label>
 			</div>
 		</div>
 		<div id="config-buttons">

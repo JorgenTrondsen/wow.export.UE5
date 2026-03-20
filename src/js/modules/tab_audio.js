@@ -13,7 +13,7 @@ const InstallType = require('../install-type');
 const { AudioPlayer, AUDIO_TYPE_OGG, AUDIO_TYPE_MP3, detectFileType } = audioHelper;
 
 let selected_file = null;
-let has_sound_data_loaded = false;
+let selected_file_data_id = null;
 let animation_frame_id = null;
 let file_data = null;
 
@@ -53,8 +53,10 @@ const load_track = async (core) => {
 	log.write('Previewing sound file %s', selected_file);
 
 	try {
-		const file_data_id = listfile.getByFilename(selected_file);
-		file_data = await core.view.casc.getFile(file_data_id);
+		if (selected_file_data_id !== null)
+			file_data = await core.view.casc.getFile(selected_file_data_id);
+		else
+			file_data = await core.view.casc.getFileByName(selected_file);
 
 		if (selected_file.endsWith('.unk_sound')) {
 			const file_type = detectFileType(file_data);
@@ -115,33 +117,6 @@ const pause_track = (core) => {
 	player.pause();
 	stop_seek_loop();
 	core.view.soundPlayerState = false;
-};
-
-const load_sound_data = async (core) => {
-	if (!has_sound_data_loaded && !core.view.isBusy && core.view.config.enableUnknownFiles) {
-		core.showLoadingScreen(1);
-
-		try {
-			await core.progressLoadingScreen('Processing unknown sound files...');
-
-			let unknown_count = 0;
-			for (const entry of (await db2.SoundKitEntry.getAllRows()).values()) {
-				if (!listfile.existsByID(entry.FileDataID)) {
-					const file_name = 'unknown/' + entry.FileDataID + '.unk_sound';
-					listfile.addEntry(entry.FileDataID, file_name, core.view.listfileSounds);
-					unknown_count++;
-				}
-			}
-
-			log.write('Added %d unknown sound files from SoundKitEntry to listfile', unknown_count);
-			has_sound_data_loaded = true;
-		} catch (e) {
-			log.write('Failed to load sound data: %s', e.message);
-			core.setToast('error', 'Failed to load sound data', { 'View Log': () => log.openRuntimeLog() }, -1);
-		}
-
-		core.hideLoadingScreen();
-	}
 };
 
 const export_sounds = async (core) => {
@@ -292,21 +267,42 @@ module.exports = {
 				player.seek(duration * seek);
 		},
 
+		async initialize() {
+			player.init();
+			player.set_volume(this.$core.view.config.soundPlayerVolume);
+			player.set_loop(this.$core.view.config.soundPlayerLoop);
+
+			player.on_ended = () => {
+				stop_seek_loop();
+				this.$core.view.soundPlayerState = false;
+				this.$core.view.soundPlayerSeek = 0;
+			};
+
+			if (this.$core.view.config.enableUnknownFiles) {
+				this.$core.showLoadingScreen(1);
+				await this.$core.progressLoadingScreen('Processing unknown sound files...');
+
+				let unknown_count = 0;
+				for (const entry of (await db2.SoundKitEntry.getAllRows()).values()) {
+					if (!listfile.existsByID(entry.FileDataID)) {
+						const file_name = 'unknown/' + entry.FileDataID + '.unk_sound';
+						listfile.addEntry(entry.FileDataID, file_name, this.$core.view.listfileSounds);
+						unknown_count++;
+					}
+				}
+
+				log.write('Added %d unknown sound files from SoundKitEntry to listfile', unknown_count);
+				this.$core.hideLoadingScreen();
+			}
+		},
+
 		async export_selected() {
 			await export_sounds(this.$core);
 		}
 	},
 
 	async mounted() {
-		player.init();
-		player.set_volume(this.$core.view.config.soundPlayerVolume);
-		player.set_loop(this.$core.view.config.soundPlayerLoop);
-
-		player.on_ended = () => {
-			stop_seek_loop();
-			this.$core.view.soundPlayerState = false;
-			this.$core.view.soundPlayerSeek = 0;
-		};
+		await this.initialize();
 
 		this.$core.view.$watch('config.soundPlayerVolume', value => {
 			player.set_volume(value);
@@ -317,11 +313,12 @@ module.exports = {
 		});
 
 		this.$core.view.$watch('selectionSounds', async selection => {
-			const first = listfile.stripFileEntry(selection[0]);
-			if (!this.$core.view.isBusy && first && selected_file !== first) {
-				this.$core.view.soundPlayerTitle = path.basename(first);
+			const entry = listfile.parseFileEntry(selection[0]);
+			if (!this.$core.view.isBusy && entry.file_path && selected_file !== entry.file_path) {
+				this.$core.view.soundPlayerTitle = path.basename(entry.file_path);
 
-				selected_file = first;
+				selected_file = entry.file_path;
+				selected_file_data_id = entry.file_data_id ?? null;
 				unload_track(this.$core);
 
 				if (this.$core.view.config.soundPlayerAutoPlay)
@@ -333,7 +330,5 @@ module.exports = {
 			unload_track(this.$core);
 			player.destroy();
 		});
-
-		await load_sound_data(this.$core);
 	}
 };

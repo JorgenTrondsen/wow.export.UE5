@@ -8,7 +8,11 @@
 const path = require('path');
 const os = require('os');
 
-const INSTALL_PATH = path.dirname(process.execPath);
+// on macOS, process.execPath points to the renderer helper binary deep inside
+// the framework, not the app root. use __dirname (app.nw/src/) instead.
+const INSTALL_PATH = process.platform === 'darwin'
+	? path.resolve(path.join(__dirname, '..'))
+	: path.dirname(process.execPath);
 const DATA_PATH = nw.App.dataPath;
 
 const UPDATER_EXT = { win32: '.exe', darwin: '.app' };
@@ -82,6 +86,9 @@ module.exports = {
 		LISTFILE_DATA: 'listfile.txt', // Master listfile data file.
 		TACT_KEYS: path.join(DATA_PATH, 'tact.json'), // Tact key cache.
 		REALMLIST: path.join(DATA_PATH, 'realmlist.json'), // Realmlist cache.
+		SUBMIT_URL: 'https://www.kruithne.net/wow.export/v2/cache/submit',
+		FINALIZE_URL: 'https://www.kruithne.net/wow.export/v2/cache/finalize',
+		STATE_FILE: path.join(DATA_PATH, 'cache_state.json'),
 	},
 
 	CONFIG:  {
@@ -174,6 +181,7 @@ module.exports = {
 		'tab_items',
 		'tab_item_sets',
 		'tab_decor',
+		'tab_creatures',
 		'tab_audio',
 		'tab_videos',
 		'tab_maps',

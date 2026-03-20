@@ -98,17 +98,29 @@ const listfile_preload_binary = async () => {
 		}
 		
 		if (listfile_check_cache_expiry(last_modified)) {
+			let download_failed = false;
+
 			for (const file of Object.values(BIN_LF_COMPONENTS)) {
 				const file_url = util.format(bin_url, file);
 				const cache_file = path.join(constants.CACHE.DIR_LISTFILE, file);
-				
+
 				try {
 					log.write('Downloading binary listfile component: %s', file);
 					const data = await generics.downloadFile([file_url]);
 					await fsp.writeFile(cache_file, data.raw);
 				} catch (e) {
 					log.write('Failed to download binary listfile component (%s): %s)', file, e.message);
+					download_failed = true;
+					break;
 				}
+			}
+
+			if (download_failed) {
+				log.write('Partial binary listfile download detected, cleaning up...');
+				for (const file of Object.values(BIN_LF_COMPONENTS))
+					await fsp.unlink(path.join(constants.CACHE.DIR_LISTFILE, file)).catch(() => {});
+
+				throw new Error('Partial binary listfile download, falling back to legacy');
 			}
 		}
 		
@@ -852,8 +864,15 @@ const getFilteredEntries = (search) => {
 const stripFileEntry = (entry) => {
 	if (typeof entry === 'string' && entry.includes(' ['))
 		return entry.substring(0, entry.lastIndexOf(' ['));
-	
+
 	return entry;
+};
+
+const parseFileEntry = (entry) => {
+	const file_path = stripFileEntry(entry);
+	const fid_match = typeof entry === 'string' ? entry.match(/\[(\d+)\]$/) : null;
+	const file_data_id = fid_match ? parseInt(fid_match[1], 10) : undefined;
+	return { file_path, file_data_id };
 };
 
 /**
@@ -899,6 +918,7 @@ module.exports = {
 	getFilteredEntries,
 	getByIDOrUnknown,
 	stripFileEntry,
+	parseFileEntry,
 	formatEntries,
 	formatUnknownFile,
 	ingestIdentifiedFiles,

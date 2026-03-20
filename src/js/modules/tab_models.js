@@ -540,24 +540,15 @@ module.exports = {
 				state.animPaused = false;
 				active_renderer?.set_animation_paused?.(false);
 			}
-		}
-	},
+		},
 
-	async mounted() {
-		// register drop handler
-		this.$core.registerDropHandler({
-			ext: ['.m2'],
-			prompt: count => util.format('Export %d models as %s', count, this.$core.view.config.exportModelFormat),
-			process: files => export_files(this.$core, files, true)
-		});
+		async initialize() {
+			let step_count = 2;
+			if (this.$core.view.config.enableUnknownFiles) step_count++;
+			if (this.$core.view.config.enableM2Skins) step_count += 2;
 
-		let step_count = 2;
-		if (this.$core.view.config.enableUnknownFiles) step_count++;
-		if (this.$core.view.config.enableM2Skins) step_count += 2;
+			this.$core.showLoadingScreen(step_count);
 
-		this.$core.showLoadingScreen(step_count);
-
-		try {
 			await this.$core.progressLoadingScreen('Loading model file data...');
 			await DBModelFileData.initializeModelFileData();
 
@@ -580,12 +571,17 @@ module.exports = {
 				this.$core.view.modelViewerContext = Object.seal({ getActiveRenderer: () => active_renderer, gl_context: null, fitCamera: null });
 
 			this.$core.hideLoadingScreen();
-
-		} catch (error) {
-			this.$core.hideLoadingScreen();
-			log.write('Failed to initialize models tab: %o', error);
-			this.$core.setToast('error', 'Failed to initialize models tab. Check the log for details.');
 		}
+	},
+
+	async mounted() {
+		this.$core.registerDropHandler({
+			ext: ['.m2'],
+			prompt: count => util.format('Export %d models as %s', count, this.$core.view.config.exportModelFormat),
+			process: files => export_files(this.$core, files, true)
+		});
+
+		await this.initialize();
 
 		this.$core.view.$watch('modelViewerSkinsSelection', async selection => {
 			if (!active_renderer || active_skins.size === 0)
@@ -631,12 +627,14 @@ module.exports = {
 			await modelViewerUtils.handle_animation_change(
 				active_renderer,
 				state,
-				selected_animation_id,
-				() => this.$core.view.modelViewerContext?.fitCamera?.()
+				selected_animation_id
 			);
 		});
 
 		this.$core.view.$watch('selectionModels', async selection => {
+			if (!this._tab_initialized)
+				return;
+
 			if (!this.$core.view.config.modelsAutoPreview)
 				return;
 

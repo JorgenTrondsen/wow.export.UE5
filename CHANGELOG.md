@@ -1,4 +1,35 @@
-## 0.2.11
+## 0.2.14 (19-03-2026)
+- Added "Creatures" tab, allowing export of NPCs with both custom and character models.
+- Added ability to select/export multiple DB2 tables at once.
+- Fixed some character item textures being selected for the wrong race/gender.
+- Fixed an issue that caused Auto Camera to reset the camera when changing animations.
+- Fixed an issue that would prevent data tables with BigInt values from opening in the data tab.
+- Fixed an issue that would cause wow.export to crash when previewing UV layers on texture previews.
+- wow.export will now optionally collect anonymous cache data for NPCs and quests for community usage.
+
+## 0.2.13 (21-02-2026)
+- Added guild tabard customization to character tool.
+- Added housing decor categories to quickly filter decor models.
+- Fixed an issue that prevented certain animations from exporting correctly.
+- Fixed an issue that would prevent certain models from loading/exporting.
+- Fixed a regression that caused WMO exports to error.
+- Fixed a crash when opening the runtime log from the popup on the character tab.
+- Fixed "Export Animations" checkbox missing on house decor tab.
+- Fixed a bug that would cause the installer to hang under certain conditions.
+- Fixed a bug that results in a partially-corrupt listfile state on network issues.
+- Fixed house decor tab showing decor that doesn't exist in the game files.
+- Fixed various issues with macOS builds (thanks schlumpf!)
+- Blender add-on will no longer stop dead when importing if it encounters an error with one object (thanks BrettMCoding!).
+- Removed casc.wago.tools as CDN fallback due to it missing files and replaced it with archive.wow.tools for now.
+- Added a warning to the installer when trying to execute out of a ZIP archive.
+
+## 0.2.12 (19-02-2026)
+- Added cdn.blizzard.com and casc.wago.tools as CDN fallbacks.
+- Added user-setting option to configure CDN fallback hosts.
+- Fixed an issue that would cause functionality to fail after network errors.
+- Fixed an issue that caused WMOs to incorrectly split by group on ADT exports.
+
+## 0.2.11 (19-02-2026)
 - Fixed an issue that would cause an error when exporting models with "Textures" disabled.
 
 ## 0.2.10 (02-02-2026)

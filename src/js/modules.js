@@ -38,6 +38,7 @@ const MODULES = {
 	tab_fonts: require('./modules/tab_fonts'),
 	tab_videos: require('./modules/tab_videos'),
 	tab_models: require('./modules/tab_models'),
+	tab_creatures: require('./modules/tab_creatures'),
 	tab_decor: require('./modules/tab_decor'),
 	tab_audio: require('./modules/tab_audio'),
 	tab_items: require('./modules/tab_items'),
@@ -197,7 +198,6 @@ function update_context_menu_options() {
 }
 
 function wrap_module(module_name, module_def) {
-	// inject $modules, $core, and $components into component
 	if (!module_def.computed)
 		module_def.computed = {};
 
@@ -205,13 +205,50 @@ function wrap_module(module_name, module_def) {
 	module_def.computed.$core = () => core;
 	module_def.computed.$components = () => component_registry;
 
-	// call register function if it exists
+	let display_label = module_name;
+
 	if (typeof module_def.register === 'function') {
 		const register_context = {
-			registerNavButton: (label, icon, install_types) => register_nav_button(module_name, label, icon, install_types),
+			registerNavButton: (label, icon, install_types) => {
+				display_label = label;
+				register_nav_button(module_name, label, icon, install_types);
+			},
 			registerContextMenuOption: (label, icon) => register_context_menu_option(module_name, label, icon)
 		};
 		module_def.register.call(register_context);
+	}
+
+	// wrap initialize() with idempotency guard, error handling, and activated() retry
+	if (module_def.methods?.initialize) {
+		const original_initialize = module_def.methods.initialize;
+
+		module_def.methods.initialize = async function() {
+			if (this._tab_initialized || this._tab_initializing)
+				return;
+
+			this._tab_initializing = true;
+
+			try {
+				await original_initialize.call(this);
+				this._tab_initialized = true;
+			} catch (error) {
+				this.$core.hideLoadingScreen();
+				log.write('Failed to initialize %s tab: %o', display_label, error);
+				this.$core.setToast('error', 'Failed to initialize ' + display_label + ' tab. Check the log for details.', { 'View Log': () => log.openRuntimeLog() }, -1);
+				this.$modules.go_to_landing();
+			} finally {
+				this._tab_initializing = false;
+			}
+		};
+
+		const original_activated = module_def.activated;
+		module_def.activated = function() {
+			if (!this._tab_initialized && !this._tab_initializing)
+				this.initialize();
+
+			if (original_activated)
+				original_activated.call(this);
+		};
 	}
 
 	return new Proxy(module_def, {

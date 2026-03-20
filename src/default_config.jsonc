@@ -21,6 +21,7 @@
 	"cascLocale": 2,
 	"recentLocal": [],
 	"sourceSelectUserRegion": null,
+	"cdnFallbackHosts": "cdn.blizzard.com, archive.wow.tools",
 	"tactKeysURL": "https://raw.githubusercontent.com/wowdev/TACTKeys/master/WoW.txt",
 	"tactKeysFallbackURL": "https://www.kruithne.net/wow.export/data/tact/wow",
 	"realmListURL": "https://marlam.in/we/cached-realms.json",
@@ -55,6 +56,8 @@
 	"legacyModelsAutoPreview": true,
 	"decorAutoPreview": true,
 	"exportDecorFormat": "OBJ",
+	"creatureAutoPreview": true,
+	"exportCreatureFormat": "OBJ",
 	"exportLegacyModelFormat": "RAW",
 	"modelViewerShowGrid": true,
 	"modelViewerShowBackground": false,
@@ -116,5 +119,7 @@
 	"itemViewerShowAll": false,
 	"pathFormat": "win32",
 	"showZoneBaseMap": true,
-	"showZoneOverlays": true
+	"showZoneOverlays": true,
+	"allowCacheCollection": true,
+	"machineId": null
 }
