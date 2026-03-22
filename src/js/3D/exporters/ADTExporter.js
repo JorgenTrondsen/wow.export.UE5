@@ -49,7 +49,7 @@ let gl;
 
 /**
  * Load a texture from CASC and bind it to the GL context.
- * @param {number} fileDataID 
+ * @param {number} fileDataID
  */
 const loadTexture = async (fileDataID) => {
 	const texture = gl.createTexture();
@@ -88,7 +88,7 @@ const loadFoliageTables = async () => {
 
 /**
  * Bind an alpha layer to the GL context.
- * @param {Array} layer 
+ * @param {Array} layer
  */
 const bindAlphaLayer = (layer) => {
 	const texture = gl.createTexture();
@@ -237,9 +237,9 @@ const compileShaders = (useOld = false) => {
 class ADTExporter {
 	/**
 	 * Construct a new ADTLoader instance.
-	 * @param {number} mapID 
-	 * @param {string} mapDir 
-	 * @param {number} tileIndex 
+	 * @param {number} mapID
+	 * @param {string} mapDir
+	 * @param {number} tileIndex
 	 */
 	constructor(mapID, mapDir, tileIndex) {
 		this.mapID = mapID;
@@ -322,10 +322,10 @@ class ADTExporter {
 				fileName = ExportHelper.replaceExtension(fileName, '.png');
 			else
 				fileName = listfile.formatUnknownFile(fileDataID, '.png');
-		
+
 			let texFile;
 			let texPath;
-		
+
 			if (config.enableSharedTextures) {
 				texPath = ExportHelper.getExportPath(fileName);
 				texFile = path.relative(dir, texPath);
@@ -333,9 +333,9 @@ class ADTExporter {
 				texPath = path.join(dir, path.basename(fileName));
 				texFile = path.basename(texPath);
 			}
-		
+
 			await blp.saveToPNG(texPath);
-		
+
 			return usePosix ? ExportHelper.win32ToPosix(texFile) : texFile;
 		};
 
@@ -569,43 +569,45 @@ class ADTExporter {
 
 				const imageSuffix = imageIndex === 0 ? '' : '_' + imageIndex;
 				const mergedPath = path.join(dir, 'tex_' + this.tileID + imageSuffix + '.png');
-				
+
 				// Downsample to requested resolution if specified
 				const defaultSize = 64 * 16;
 				if (resolution && resolution !== defaultSize) {
-					const nearestPowerOf2 = Math.pow(2, Math.ceil(Math.log2(resolution)));
-					const canvas = new OffscreenCanvas(defaultSize, defaultSize);
-					canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixelData), defaultSize, defaultSize), 0, 0);
-					
-					let scaled = new OffscreenCanvas(nearestPowerOf2, nearestPowerOf2);
-					scaled.getContext('2d').drawImage(canvas, 0, 0, nearestPowerOf2, nearestPowerOf2);
-					
-					if (resolution !== nearestPowerOf2) {
-						const imageData = scaled.getContext('2d').getImageData(0, 0, nearestPowerOf2, nearestPowerOf2);
-						const skipIdx = Math.floor(resolution / 2);
-						
-						const final = new OffscreenCanvas(resolution, resolution);
-						const finalData = final.getContext('2d').createImageData(resolution, resolution);
-						
-						// Copy pixels, skipping center row and column from source
-						for (let y = 0; y < resolution; y++) {
-							const srcY = (y < skipIdx ? y : y + 1) * nearestPowerOf2;
-							const dstY = y * resolution;
-							for (let x = 0; x < resolution; x++) {
-								const srcIdx = (srcY + (x < skipIdx ? x : x + 1)) * 4;
-								const dstIdx = (dstY + x) * 4;
-								finalData.data[dstIdx + 0] = imageData.data[srcIdx + 0];
-								finalData.data[dstIdx + 1] = imageData.data[srcIdx + 1];
-								finalData.data[dstIdx + 2] = imageData.data[srcIdx + 2];
-								finalData.data[dstIdx + 3] = imageData.data[srcIdx + 3];
+					const scale = defaultSize / resolution;
+					const newPixelData = new Uint8ClampedArray(resolution * resolution * 4);
+
+					for (let y = 0; y < resolution; y++) {
+						for (let x = 0; x < resolution; x++) {
+							let r = 0, g = 0, b = 0, a = 0;		// Box sample for smooth, anti-aliased downscaling
+							const startX = Math.floor(x * scale);
+							const startY = Math.floor(y * scale);
+							const endX = Math.min(defaultSize, Math.max(startX + 1, Math.floor((x + 1) * scale)));
+							const endY = Math.min(defaultSize, Math.max(startY + 1, Math.floor((y + 1) * scale)));
+
+							const count = (endX - startX) * (endY - startY);
+
+							for (let sy = startY; sy < endY; sy++) {
+								for (let sx = startX; sx < endX; sx++) {
+									const srcIndex = (sy * defaultSize + sx) * 4;
+									r += pixelData[srcIndex + 0];
+									g += pixelData[srcIndex + 1];
+									b += pixelData[srcIndex + 2];
+									a += pixelData[srcIndex + 3];
+								}
 							}
+
+							const destIndex = (y * resolution + x) * 4;
+							newPixelData[destIndex + 0] = r / count;
+							newPixelData[destIndex + 1] = g / count;
+							newPixelData[destIndex + 2] = b / count;
+							newPixelData[destIndex + 3] = a / count;
 						}
-						
-						final.getContext('2d').putImageData(finalData, 0, 0);
-						scaled = final;
 					}
-					
-					await (await BufferWrapper.fromCanvas(scaled, 'image/png')).writeToFile(mergedPath);
+
+					const resizedWriter = new PNGWriter(resolution, resolution);
+					const resizedPixelData = resizedWriter.getPixelData();
+					resizedPixelData.set(newPixelData);
+					await resizedWriter.write(mergedPath);
 				} else {
 					await pngWriter.write(mergedPath);
 				}
@@ -678,7 +680,7 @@ class ADTExporter {
 								await m2.exportRaw(modelPath, helper);
 							else
 								await m2.exportAsOBJ(modelPath, config.modelsExportCollision, helper);
-							
+
 							// Abort if the export has been cancelled.
 							if (helper.isCancelled())
 								return;
@@ -780,7 +782,7 @@ class ADTExporter {
 								} else {
 									mask[model.doodadSet] = { checked: true };
 								}
-								
+
 								wmoLoader.setDoodadSetMask(mask);
 							}
 
@@ -854,7 +856,7 @@ class ADTExporter {
 		const foliageExportCache = new Set();
 		const foliageEffectCache = new Set();
 		const foliageDir = path.join(dir, 'foliage');
-		
+
 		log.write('Exporting foliage to %s', foliageDir);
 
 		for (const chunk of texAdt.texChunks) {
@@ -921,9 +923,9 @@ class ADTExporter {
 		let foliageIndex = 0;
 		for (const modelID of foliageExportCache) {
 			helper.setCurrentTaskValue(foliageIndex++);
-			
+
 			const modelName = path.basename(listfile.getByID(modelID));
-			
+
 			const data = await casc.getFile(modelID);
 			const m2 = new M2Exporter(data, undefined, modelID);
 
@@ -970,7 +972,7 @@ class ADTExporter {
 
 			if (isRawExport) {
 				await wdtFile.writeToFile(path.join(dir, this.mapDir + '.wdt'));
-				
+
 				if (wdt.lgtFileDataID > 0) {
 					const lgtFile = await casc.getFile(wdt.lgtFileDataID);
 					lgtFile.writeToFile(path.join(dir, this.mapDir + '_lgt.wdt'));
@@ -1037,7 +1039,7 @@ class ADTExporter {
 			if (maid.lodADT > 0) {
 				const lodFile = await casc.getFile(maid.lodADT);
 				await lodFile.writeToFile(path.join(dir, this.mapDir + "_" + this.tileID + '_lod.adt'));
-			}		
+			}
 		}
 
 		const rootAdt = new ADTLoader(rootFile);
@@ -1073,12 +1075,12 @@ class ADTExporter {
 			const isSplittingAlphaMaps = isAlphaMaps && core.view.config.splitAlphaMaps;
 			const isSplittingTextures = isLargeBake && core.view.config.splitLargeTerrainBakes;
 			const includeHoles = core.view.config.mapsIncludeHoles;
-		
+
 			// Calculate UV bounds for single texture mode normalization
 			let uvBounds = null;
 			if (quality !== 0 && !isSplittingTextures && !isSplittingAlphaMaps)
 				uvBounds = this.calculateUVBounds(rootAdt, firstChunkX, firstChunkY);
-		
+
 			let ofs = 0;
 			let chunkID = 0;
 			for (let x = 0, midX = 0; x < 16; x++) {
@@ -1135,7 +1137,7 @@ class ADTExporter {
 
 							const uRaw = -(vx - firstChunkX) / TILE_SIZE;
 							const vRaw = (vz - firstChunkY) / TILE_SIZE;
-							
+
 							uvsBake[uvIndex + 0] = uRaw;
 							uvsBake[uvIndex + 1] = vRaw;
 
@@ -1195,7 +1197,7 @@ class ADTExporter {
 						if (!((j + 1) % (9 + 8)))
 							j += 9;
 					}
-				
+
 					ofs = midX;
 
 					if (isSplittingTextures || isSplittingAlphaMaps) {
@@ -1221,7 +1223,7 @@ class ADTExporter {
 
 			if (!mtl.isEmpty)
 				obj.setMaterialLibrary(path.basename(mtl.out));
-			
+
 			await obj.write(config.overwriteFiles);
 			await mtl.write(config.overwriteFiles);
 
@@ -1543,10 +1545,10 @@ class ADTExporter {
 					fileName = ExportHelper.replaceExtension(fileName, '.blp');
 				else
 					fileName = listfile.formatUnknownFile(fileDataID, '.blp');
-			
+
 				let texFile;
 				let texPath;
-			
+
 				if (config.enableSharedTextures) {
 					texPath = ExportHelper.getExportPath(fileName);
 					texFile = path.relative(dir, texPath);
@@ -1554,16 +1556,16 @@ class ADTExporter {
 					texPath = path.join(dir, path.basename(fileName));
 					texFile = path.basename(texPath);
 				}
-			
+
 				await blp.writeToFile(texPath);
-			
+
 				return usePosix ? ExportHelper.win32ToPosix(texFile) : texFile;
 			};
 
 			const materialIDs = texAdt.diffuseTextureFileDataIDs;
 			for (const fileDataID of materialIDs)
 				await saveRawLayerTexture(fileDataID);
-			
+
 			const heightIDs = texAdt.heightTextureFileDataIDs;
 			for (const fileDataID of heightIDs)
 				await saveRawLayerTexture(fileDataID);
@@ -1587,12 +1589,12 @@ class ADTExporter {
 					if (!instance) return instance;
 
 					const chunkX = terrainChunk.position[0];
-					const chunkY = terrainChunk.position[1]; 
+					const chunkY = terrainChunk.position[1];
 					const chunkZ = terrainChunk.position[2];
 
 					const centerX = instance.xOffset + instance.width / 2;
 					const centerY = instance.yOffset + instance.height / 2;
-					
+
 					const worldX = chunkY - (centerX * UNIT_SIZE);
 					const worldY = (instance.minHeightLevel + instance.maxHeightLevel) / 2 + chunkZ;
 					const worldZ = chunkX - (centerY * UNIT_SIZE);
