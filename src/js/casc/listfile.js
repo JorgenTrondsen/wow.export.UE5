@@ -176,6 +176,7 @@ const listfile_preload_binary = async () => {
 		// memory-map strings files
 		binary_strings_mmap = new Array(7);
 
+		const pf_file_sizes = new Array(7);
 		for (let i = 0; i < pf_files.length; i++) {
 			try {
 				const mmap_obj = mmap.create_virtual_file();
@@ -185,11 +186,30 @@ const listfile_preload_binary = async () => {
 					throw new Error('Failed to map pf file: ' + mmap_obj.lastError);
 
 				binary_strings_mmap[i] = mmap_obj;
+				pf_file_sizes[i] = (await fsp.stat(file_path)).size;
 			} catch (e) {
 				log.write('Error mapping pf file %d: %s', i, e.message);
 				throw e;
 			}
 		}
+
+		// validate index-to-data consistency by checking all offsets are in bounds
+		for (const [id, string_offset] of binary_id_to_offset) {
+			const pf_index = binary_id_to_pf_index.get(id);
+			const file_size = pf_file_sizes[pf_index];
+
+			if (pf_index >= pf_file_sizes.length || string_offset >= file_size) {
+				log.write('Binary listfile consistency check failed: ID %d offset %d out of bounds for pf %d (size %d)', id, string_offset, pf_index, file_size);
+				log.write('Purging cached binary listfile...');
+
+				for (const file of Object.values(BIN_LF_COMPONENTS))
+					await fsp.unlink(path.join(constants.CACHE.DIR_LISTFILE, file)).catch(() => {});
+
+				throw new Error('Binary listfile index/data mismatch detected, falling back to legacy');
+			}
+		}
+
+		log.write('Binary listfile consistency check passed');
 
 		// preload pre-filtered files (skip 0 which is main strings, skip null entries)
 		for (let i = 1; i < pf_files.length; i++) {
@@ -709,6 +729,7 @@ const ingestIdentifiedFiles = (entries) => {
 
 const renderListfile = async (file_data_ids, include_main_index = false) => {
 	const result = [];
+	const seen_ids = file_data_ids ? new Set() : null;
 
 	if (is_binary_mode) {
 		const pf_files = [
@@ -733,8 +754,12 @@ const renderListfile = async (file_data_ids, include_main_index = false) => {
 				const file_data_id = file_buffer.readUInt32BE();
 				const filename = file_buffer.readNullTerminatedString('utf8');
 
-				if (id_set === null || id_set.has(file_data_id))
+				if (id_set === null || id_set.has(file_data_id)) {
 					result.push(`${filename} [${file_data_id}]`);
+
+					if (seen_ids)
+						seen_ids.add(file_data_id);
+				}
 			}
 		}
 	}
@@ -747,8 +772,18 @@ const renderListfile = async (file_data_ids, include_main_index = false) => {
 	} else {
 		const id_set = new Set(file_data_ids);
 		for (const [file_data_id, filename] of legacy_id_lookup) {
-			if (id_set.has(file_data_id))
+			if (id_set.has(file_data_id)) {
 				result.push(`${filename} [${file_data_id}]`);
+				seen_ids.add(file_data_id);
+			}
+		}
+	}
+
+	// append unnamed entries for IDs not found in any data source
+	if (file_data_ids !== undefined) {
+		for (const id of file_data_ids) {
+			if (!seen_ids.has(id))
+				result.push(`unknown/${id} [${id}]`);
 		}
 	}
 

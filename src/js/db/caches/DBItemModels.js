@@ -7,11 +7,11 @@
 const log = require('../../log');
 const db2 = require('../../casc/db2');
 const DBModelFileData = require('./DBModelFileData');
-const DBTextureFileData = require('./DBTextureFileData');
+const DBItemDisplayInfoModelMatRes = require('./DBItemDisplayInfoModelMatRes');
 const DBComponentModelFileData = require('./DBComponentModelFileData');
 
-// maps ItemID -> ItemDisplayInfoID
-const item_to_display_id = new Map();
+// maps ItemID -> Map<ItemAppearanceModifierID, ItemDisplayInfoID>
+const item_to_display_ids = new Map();
 
 // maps ItemDisplayInfoID -> { modelOptions: [[fdid, ...], ...], textures: [fdid, ...], geosetGroup: [...], attachmentGeosetGroup: [...] }
 const display_to_data = new Map();
@@ -30,23 +30,33 @@ const initialize = async () => {
 		log.write('Loading item models...');
 
 		await DBModelFileData.initializeModelFileData();
-		await DBTextureFileData.ensureInitialized();
 		await DBComponentModelFileData.initialize();
+		await DBItemDisplayInfoModelMatRes.ensureInitialized();
 
-		// build item -> appearance -> display chain
+		// build item -> modifier -> appearance -> display chain
 		const appearance_map = new Map();
-		for (const row of (await db2.ItemModifiedAppearance.getAllRows()).values())
-			appearance_map.set(row.ItemID, row.ItemAppearanceID);
+		for (const row of (await db2.ItemModifiedAppearance.getAllRows()).values()) {
+			if (!appearance_map.has(row.ItemID))
+				appearance_map.set(row.ItemID, new Map());
+
+			appearance_map.get(row.ItemID).set(row.ItemAppearanceModifierID, row.ItemAppearanceID);
+		}
 
 		const appearance_to_display = new Map();
 		for (const [id, row] of await db2.ItemAppearance.getAllRows())
 			appearance_to_display.set(id, row.ItemDisplayInfoID);
 
-		// map item id to display id
-		for (const [item_id, appearance_id] of appearance_map) {
-			const display_id = appearance_to_display.get(appearance_id);
-			if (display_id !== undefined && display_id !== 0)
-				item_to_display_id.set(item_id, display_id);
+		// map item id -> modifier -> display id
+		for (const [item_id, modifiers] of appearance_map) {
+			for (const [modifier_id, appearance_id] of modifiers) {
+				const display_id = appearance_to_display.get(appearance_id);
+				if (display_id !== undefined && display_id !== 0) {
+					if (!item_to_display_ids.has(item_id))
+						item_to_display_ids.set(item_id, new Map());
+
+					item_to_display_ids.get(item_id).set(modifier_id, display_id);
+				}
+			}
 		}
 
 		// load model and texture file data IDs from ItemDisplayInfo
@@ -68,13 +78,11 @@ const initialize = async () => {
 			if (model_options.every(arr => arr.length === 0))
 				continue;
 
-			// get texture file data IDs from material resources
-			const mat_res_ids = row.ModelMaterialResourcesID.filter(e => e > 0);
+			// get texture file data IDs from display id
 			const texture_file_data_ids = [];
-			for (const mat_res_id of mat_res_ids) {
-				const tex_fdids = DBTextureFileData.getTextureFDIDsByMatID(mat_res_id);
-				if (tex_fdids && tex_fdids.length > 0)
-					texture_file_data_ids.push(tex_fdids[0]);
+			const itemDisplayTexFileDataIDs = DBItemDisplayInfoModelMatRes.getItemDisplayIdTextureFileIds(display_id);
+			if (itemDisplayTexFileDataIDs !== undefined) {
+				texture_file_data_ids.push(...itemDisplayTexFileDataIDs);
 			}
 
 			// geoset groups for character model and attachment/collection models
@@ -103,12 +111,35 @@ const ensure_initialized = async () => {
 };
 
 /**
+ * Resolve display ID for an item, optionally with a specific modifier.
+ * @param {number} item_id
+ * @param {number} [modifier_id]
+ * @returns {number|undefined}
+ */
+const resolve_display_id = (item_id, modifier_id) => {
+	const modifiers = item_to_display_ids.get(item_id);
+	if (!modifiers)
+		return undefined;
+
+	if (modifier_id !== undefined)
+		return modifiers.get(modifier_id);
+
+	// default: prefer modifier 0, else lowest available
+	if (modifiers.has(0))
+		return modifiers.get(0);
+
+	const sorted = [...modifiers.keys()].sort((a, b) => a - b);
+	return modifiers.get(sorted[0]);
+};
+
+/**
  * Get model file data IDs for an item (first option per model resource).
  * @param {number} item_id
+ * @param {number} [modifier_id]
  * @returns {Array<number>|null}
  */
-const get_item_models = (item_id) => {
-	const display_id = item_to_display_id.get(item_id);
+const get_item_models = (item_id, modifier_id) => {
+	const display_id = resolve_display_id(item_id, modifier_id);
 	if (display_id === undefined)
 		return null;
 
@@ -127,10 +158,12 @@ const get_item_models = (item_id) => {
  * @param {number} item_id
  * @param {number} [race_id] - character race ID for filtering
  * @param {number} [gender_index] - 0=male, 1=female for filtering
+ * @param {number} [modifier_id] - item appearance modifier (skin index)
+ * @param {'left'|'right'} [shoulder_position] - for shoulder items, return only the specified side
  * @returns {{ID: number, textures: number[], models: number[], geosetGroup: number[], attachmentGeosetGroup: number[]}|null}
  */
-const get_item_display = (item_id, race_id, gender_index) => {
-	const display_id = item_to_display_id.get(item_id);
+const get_item_display = (item_id, race_id, gender_index, modifier_id, shoulder_position) => {
+	const display_id = resolve_display_id(item_id, modifier_id);
 	if (display_id === undefined)
 		return null;
 
@@ -150,15 +183,22 @@ const get_item_display = (item_id, race_id, gender_index) => {
 		data.modelOptions[0].every((v, i) => v === data.modelOptions[1][i]);
 
 	if (is_shoulder_style && race_id !== undefined && gender_index !== undefined) {
-		// for shoulders, select two models with different PositionIndex values
 		const options = data.modelOptions[0];
 		const candidates = DBComponentModelFileData.getModelsForRaceGenderByPosition(options, race_id, gender_index);
 
-		if (candidates.left)
-			models.push(candidates.left);
+		if (shoulder_position === 'left') {
+			if (candidates.left)
+				models.push(candidates.left);
+		} else if (shoulder_position === 'right') {
+			if (candidates.right)
+				models.push(candidates.right);
+		} else {
+			if (candidates.left)
+				models.push(candidates.left);
 
-		if (candidates.right)
-			models.push(candidates.right);
+			if (candidates.right)
+				models.push(candidates.right);
+		}
 	} else {
 		// standard logic for non-shoulder items
 		for (const options of data.modelOptions) {
@@ -187,10 +227,24 @@ const get_item_display = (item_id, race_id, gender_index) => {
 /**
  * Get ItemDisplayInfoID for an item.
  * @param {number} item_id
+ * @param {number} [modifier_id]
  * @returns {number|undefined}
  */
-const get_display_id = (item_id) => {
-	return item_to_display_id.get(item_id);
+const get_display_id = (item_id, modifier_id) => {
+	return resolve_display_id(item_id, modifier_id);
+};
+
+/**
+ * Get available modifier IDs for an item.
+ * @param {number} item_id
+ * @returns {number[]}
+ */
+const get_item_modifiers = (item_id) => {
+	const modifiers = item_to_display_ids.get(item_id);
+	if (!modifiers)
+		return [];
+
+	return [...modifiers.keys()].sort((a, b) => a - b);
 };
 
 /**
@@ -252,5 +306,6 @@ module.exports = {
 	getItemModels: get_item_models,
 	getItemDisplay: get_item_display,
 	getDisplayId: get_display_id,
-	getDisplayData: get_display_data
+	getDisplayData: get_display_data,
+	getItemModifiers: get_item_modifiers
 };

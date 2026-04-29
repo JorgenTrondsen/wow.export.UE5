@@ -5,6 +5,8 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } fr
 import { join, resolve } from 'path';
 import { log, log_color } from './log.js';
 
+const target_arch = process.argv.find(a => a.startsWith('--arch='))?.split('=')[1] ?? process.arch;
+
 const build_config = await Bun.file('./build.json').json();
 const nw_version = build_config.webkitVersion;
 const addons_dir = resolve(process.cwd(), 'node_addons');
@@ -48,12 +50,12 @@ async function patch_delay_load_hook() {
 	const search_paths = [];
 
 	try {
-		const npm_root = execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim();
+		const npm_root = execFileSync('npm', ['root', '-g'], { encoding: 'utf8', shell: true }).trim();
 		search_paths.push(resolve(npm_root, 'node-gyp/src/win_delay_load_hook.cc'));
 	} catch {}
 
 	try {
-		const npm_prefix = execFileSync('npm', ['prefix', '-g'], { encoding: 'utf8' }).trim();
+		const npm_prefix = execFileSync('npm', ['prefix', '-g'], { encoding: 'utf8', shell: true }).trim();
 		search_paths.push(resolve(npm_prefix, 'node_modules/node-gyp/src/win_delay_load_hook.cc'));
 	} catch {}
 
@@ -179,7 +181,7 @@ function install_deps(addon_dir) {
 
 function rebuild_addon(addon_dir) {
 	const addon_name = join(addon_dir).split(/[/\\]/).pop();
-	log.info('Building addon *%s*...', addon_name);
+	log.info('Building addon *%s* for *%s*...', addon_name, target_arch);
 
 	const args = [
 		'rebuild',
@@ -187,9 +189,15 @@ function rebuild_addon(addon_dir) {
 		`--nodedir=${node_dir}`
 	];
 
-	execFileSync('npx', ['nw-gyp', ...args], {
+	execFileSync('node-gyp', [...args, `--arch=${target_arch}`], {
 		cwd: addon_dir,
-		stdio: 'inherit'
+		stdio: 'inherit',
+		shell: true,
+		env: {
+			...process.env,
+			npm_config_runtime: 'node-webkit',
+			npm_config_target: nw_version
+		}
 	});
 }
 

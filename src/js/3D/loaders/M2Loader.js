@@ -653,10 +653,10 @@ class M2Loader {
 			normals[i * 3 + 1] = this.data.readFloatLE();
 	
 			uv[i * 2] = this.data.readFloatLE();
-			uv[i * 2 + 1] = (this.data.readFloatLE() - 1) * -1;
+			uv[i * 2 + 1] = this.data.readFloatLE();
 
 			uv2[i * 2] = this.data.readFloatLE();
-			uv2[i * 2 + 1] = (this.data.readFloatLE() - 1) * -1;
+			uv2[i * 2 + 1] = this.data.readFloatLE();
 		}
 
 		this.data.seek(base);
@@ -880,7 +880,7 @@ class M2Loader {
 		const base = this.data.offset;
 		this.data.seek(globalLoopOfs + ofs);
 
-		this.globalLoops = this.data.readInt16LE(globalLoopCount);
+		this.globalLoops = this.data.readInt32LE(globalLoopCount);
 
 		this.data.seek(base);
 	}

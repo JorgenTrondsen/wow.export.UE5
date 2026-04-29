@@ -73,9 +73,6 @@ class WMOLegacyExporter {
 			const materialTextures = [material.texture1, material.texture2, material.texture3];
 
 			for (const materialTexture of materialTextures) {
-				if (materialTexture === 0)
-					continue;
-
 				const texturePath = this.wmo.textureNames?.[materialTexture];
 				if (!texturePath || texturePath.length === 0)
 					continue;
@@ -132,6 +129,7 @@ class WMOLegacyExporter {
 		const mpq = this.mpq;
 
 		const obj = new OBJWriter(out);
+		obj.flip_uvs = true;
 		const mtl = new MTLWriter(ExportHelper.replaceExtension(out, '.mtl'));
 
 		const groupMask = this.groupMask;

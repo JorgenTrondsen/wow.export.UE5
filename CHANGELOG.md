@@ -1,5 +1,42 @@
-## 0.2.15 (xx-04-2026)
+## 0.2.16 (29-04-2026)
+- Fixed a regression causing terrain UV maps to be broken.
+- Fixed crash when loading Dracthyr characters (thanks Natnat).
+
+## 0.2.15 (26-04-2026)
+- Added ability to equip left and right shoulderpads independently.
+- Added support for item variants in character customization.
+- Added support for conditional character models (such as upright orcs).
+- Added working builds for macOS Apple Silicon (ARM64). (3)
+- Added ad-hoc codesigning to portable macOS builds to reduce security warnings.
+- Added 'Apply Pose' checkbox to export models in their animated pose as OBJ/STL.
+- Importing from Battle.net now uses the correct item appearance in character customization.
+- Importing from Battle.net now loads your character's guild tabard customization.
+- Improved item equipping in character customization to be quicker and easier.
+- Improved 3D previews for WMO models.
+- Improved 3D preview rendering with animated texture effects, submesh colors, and looping visual effects. (1)
+- Improved rendering order of transparent and layered model parts in the 3D previewer. (1)
+- Improved blend mode rendering for glowing and transparent model effects. (1)
+- Improved output of newer WMO models when exporting directly as OBJ.
+- Fixed issues that would prevent wow.export from functioning correctly on macOS. (2)
+- Fixed 3D preview failing on macOS due to shader uniform limit. (2)
 - Fixed crash when copying item IDs in character tab.
+- Fixed an issue preventing the wireframe view from rendering correctly in the modelviewer.
+- Fixed missing or incorrect textures on equipped items in the character viewer. (1)
+- Fixed broken animations on models with long-running looping effects. (1)
+- Fixed lighting being incorrectly applied to unlit model parts such as glowing overlays. (1)
+- Fixed an issue that would cause wow.export to crash is last_export was a directory.
+- Fixed an issue that would cause unnamed files to no longer appear in the raw client files list.
+- Fixed an issue that would prevent Earthen characters from importing from Battle.net.
+- Fixed item model exports missing material textures.
+- Fixed an issue that prevents copying/exporting rows from the data table while a filter is active.
+- Fixed an issue that prevented colour channel UI being inaccessible when previewing large textures.
+- Fixed an issue that would cause the binary listfile to become corrupt in rare circumstances.
+- Fixed an issue preventing some models from importing in to Blender (unsupported operand type).
+- Fixed model animations not applying texture weight transparency, causing invisible geometry to render opaque.
+- Fixed an issue causing the first texture of an WMO export to be missing when exporting from MPQ archives.
+- Fixed an issue that caused posed characters exported as OBJ to have their skin upside down.
+- Fixed an issue preventing the "Import Last Export" Blender add-on feature from working on macOS/Linux.
+- Thank you to jarveson (1), VamooseAddons (2) and 0xUnkn0wN (3) for contributions included in this release.
 
 ## 0.2.14 (19-03-2026)
 - Added "Creatures" tab, allowing export of NPCs with both custom and character models.

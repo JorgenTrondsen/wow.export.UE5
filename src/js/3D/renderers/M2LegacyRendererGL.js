@@ -16,9 +16,13 @@ const VertexArray = require('../gl/VertexArray');
 const GLTexture = require('../gl/GLTexture');
 
 const textureRibbon = require('../../ui/texture-ribbon');
+const { create_bones_ubo } = require('./renderer_utils');
 
 // m2 version constants
 const M2_VER_WOTLK = 264;
+
+// must match MAX_BONES in m2.vertex.shader
+const MAX_BONES = 256;
 
 // identity matrix
 const IDENTITY_MAT4 = new Float32Array([
@@ -150,6 +154,7 @@ class M2LegacyRendererGL {
 
 		// rendering state
 		this.vaos = [];
+		this.ubos = [];
 		this.textures = new Map();
 		this.default_texture = null;
 		this.buffers = [];
@@ -161,6 +166,16 @@ class M2LegacyRendererGL {
 		this.current_animation = null;
 		this.animation_time = 0;
 		this.animation_paused = false;
+
+		// pre-allocated scratch matrices for per-frame bone calculations
+		this._scratch_local = new Float32Array(16);
+		this._scratch_trans = new Float32Array(16);
+		this._scratch_rot = new Float32Array(16);
+		this._scratch_scale = new Float32Array(16);
+		this._scratch_pivot = new Float32Array(16);
+		this._scratch_neg_pivot = new Float32Array(16);
+		this._scratch_result = new Float32Array(16);
+		this._scratch_calculated = new Uint8Array(MAX_BONES);
 
 		// reactive state
 		this.geosetKey = 'modelViewerGeosets';
@@ -301,9 +316,9 @@ class M2LegacyRendererGL {
 		this._create_skeleton();
 
 		// build interleaved vertex buffer
-		// format: position(3f) + normal(3f) + bone_idx(4ub) + bone_weight(4ub) + uv(2f) = 40 bytes
+		// format: position(3f) + normal(3f) + bone_idx(4ub) + bone_weight(4ub) + uv(2f) + uv(2f) = 48 bytes
 		const vertex_count = m2.vertices.length / 3;
-		const stride = 40;
+		const stride = 48;
 		const vertex_data = new ArrayBuffer(vertex_count * stride);
 		const vertex_view = new DataView(vertex_data);
 
@@ -338,6 +353,10 @@ class M2LegacyRendererGL {
 			// texcoord
 			vertex_view.setFloat32(offset + 32, m2.uv[uv_idx], true);
 			vertex_view.setFloat32(offset + 36, m2.uv[uv_idx + 1], true);
+
+			// texcoord2 (y-flipped for opengl bottom-left origin)
+			vertex_view.setFloat32(offset + 40, m2.uv2[uv_idx], true);
+			vertex_view.setFloat32(offset + 44, 1 - m2.uv2[uv_idx + 1], true);
 		}
 
 		// map triangle indices
@@ -361,8 +380,13 @@ class M2LegacyRendererGL {
 		this.buffers.push(ebo);
 		vao.ebo = ebo;
 
+		// wireframe index buffer
+		vao.set_wireframe_index_buffer(VertexArray.triangles_to_lines(index_data));
+
 		vao.setup_m2_vertex_format();
 		this.vaos.push(vao);
+
+		this._create_bones_ubo();
 
 		if (this.reactive)
 			this.geosetArray = new Array(skin.subMeshes.length);
@@ -441,15 +465,15 @@ class M2LegacyRendererGL {
 
 		if (!bone_data || bone_data.length === 0) {
 			this.bones = null;
-			this.bone_matrices = new Float32Array(16);
 			return;
 		}
 
 		this.bones = bone_data;
-		this.bone_matrices = new Float32Array(bone_data.length * 16);
+	}
 
-		for (let i = 0; i < bone_data.length; i++)
-			this.bone_matrices.set(IDENTITY_MAT4, i * 16);
+	_create_bones_ubo() {
+		const bone_count = this.bones ? this.bones.length : 0;
+		this.bone_matrices = create_bones_ubo(this.shader, this.gl, this.ctx, this.ubos, bone_count);
 	}
 
 	async playAnimation(index) {
@@ -550,15 +574,16 @@ class M2LegacyRendererGL {
 			anim_end = m2.animations[anim_idx].endTimestamp;
 		}
 
-		const local_mat = new Float32Array(16);
-		const trans_mat = new Float32Array(16);
-		const rot_mat = new Float32Array(16);
-		const scale_mat = new Float32Array(16);
-		const pivot_mat = new Float32Array(16);
-		const neg_pivot_mat = new Float32Array(16);
-		const temp_result = new Float32Array(16);
+		const local_mat = this._scratch_local;
+		const trans_mat = this._scratch_trans;
+		const rot_mat = this._scratch_rot;
+		const scale_mat = this._scratch_scale;
+		const pivot_mat = this._scratch_pivot;
+		const neg_pivot_mat = this._scratch_neg_pivot;
+		const temp_result = this._scratch_result;
 
-		const calculated = new Array(bone_count).fill(false);
+		const calculated = this._scratch_calculated;
+		calculated.fill(0);
 
 		const calc_bone = (idx) => {
 			if (calculated[idx])
@@ -660,7 +685,7 @@ class M2LegacyRendererGL {
 				this.bone_matrices.set(local_mat, offset);
 			}
 
-			calculated[idx] = true;
+			calculated[idx] = 1;
 		};
 
 		for (let i = 0; i < bone_count; i++)
@@ -928,8 +953,6 @@ class M2LegacyRendererGL {
 		// bone skinning disabled for legacy models until animation system is fixed
 		shader.set_uniform_1i('u_bone_count', 0);
 
-		shader.set_uniform_1i('u_has_tex_matrix1', 0);
-		shader.set_uniform_1i('u_has_tex_matrix2', 0);
 		shader.set_uniform_mat4('u_tex_matrix1', false, IDENTITY_MAT4);
 		shader.set_uniform_mat4('u_tex_matrix2', false, IDENTITY_MAT4);
 
@@ -994,13 +1017,16 @@ class M2LegacyRendererGL {
 				texture.bind(t);
 			}
 
+			this.ubos[0].ubo.bind(0);
 			dc.vao.bind();
-			gl.drawElements(
-				wireframe ? gl.LINES : gl.TRIANGLES,
-				dc.count,
-				gl.UNSIGNED_SHORT,
-				dc.start * 2
-			);
+
+			if (wireframe) {
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, dc.vao.wireframe_ebo);
+				gl.drawElements(gl.LINES, dc.count * 2, gl.UNSIGNED_SHORT, dc.start * 4);
+			} else {
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, dc.vao.ebo);
+				gl.drawElements(gl.TRIANGLES, dc.count, gl.UNSIGNED_SHORT, dc.start * 2);
+			}
 		}
 
 		ctx.set_blend(false);
@@ -1025,7 +1051,10 @@ class M2LegacyRendererGL {
 	_dispose_skin() {
 		for (const vao of this.vaos)
 			vao.dispose();
+		for (const ubo of this.ubos)
+			ubo.ubo.dispose();
 
+		this.ubos = [];
 		this.vaos = [];
 		this.buffers = [];
 		this.draw_calls = [];

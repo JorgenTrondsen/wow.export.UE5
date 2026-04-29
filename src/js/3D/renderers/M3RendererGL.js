@@ -13,6 +13,8 @@ const GLContext = require('../gl/GLContext');
 const VertexArray = require('../gl/VertexArray');
 const GLTexture = require('../gl/GLTexture');
 
+const { create_bones_ubo } = require('./renderer_utils');
+
 const IDENTITY_MAT4 = new Float32Array([
 	1, 0, 0, 0,
 	0, 1, 0, 0,
@@ -38,6 +40,7 @@ class M3RendererGL {
 
 		// rendering state
 		this.vaos = [];
+		this.ubos = [];
 		this.buffers = [];
 		this.draw_calls = [];
 		this.default_texture = null;
@@ -73,6 +76,10 @@ class M3RendererGL {
 		this.default_texture.set_rgba(pixels, 1, 1, { has_alpha: false });
 	}
 
+	_create_bones_ubo() {
+		this.bone_matrices = create_bones_ubo(this.shader, this.gl, this.ctx, this.ubos, 1);
+	}
+
 	async loadLOD(index) {
 		this._dispose_geometry();
 
@@ -80,9 +87,9 @@ class M3RendererGL {
 		const gl = this.gl;
 
 		// build interleaved vertex buffer matching M2 format
-		// format: position(3f) + normal(3f) + bone_idx(4ub) + bone_weight(4ub) + uv(2f) = 40 bytes
+		// format: position(3f) + normal(3f) + bone_idx(4ub) + bone_weight(4ub) + uv(2f) + uv(2f) = 48 bytes
 		const vertex_count = m3.vertices.length / 3;
-		const stride = 40;
+		const stride = 48;
 		const vertex_data = new ArrayBuffer(vertex_count * stride);
 		const vertex_view = new DataView(vertex_data);
 
@@ -116,6 +123,10 @@ class M3RendererGL {
 			// texcoord
 			vertex_view.setFloat32(offset + 32, m3.uv ? m3.uv[uv_idx] : 0, true);
 			vertex_view.setFloat32(offset + 36, m3.uv ? m3.uv[uv_idx + 1] : 0, true);
+
+			// texcoord2 (y-flipped for opengl bottom-left origin)
+			vertex_view.setFloat32(offset + 40, m3.uv2 ? m3.uv2[uv_idx] : 0, true);
+			vertex_view.setFloat32(offset + 44, m3.uv2 ? 1 - m3.uv2[uv_idx + 1] : 0, true);
 		}
 
 		// create VAO
@@ -133,6 +144,8 @@ class M3RendererGL {
 
 		this.vaos.push(vao);
 
+		this._create_bones_ubo();
+
 		// build draw calls for LOD 0 geosets
 		this.draw_calls = [];
 
@@ -149,9 +162,17 @@ class M3RendererGL {
 			gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 			this.buffers.push(ebo);
 
+			// wireframe index buffer
+			const wireframe_ebo = gl.createBuffer();
+			gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wireframe_ebo);
+			gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, VertexArray.triangles_to_lines(indices), gl.STATIC_DRAW);
+			this.buffers.push(wireframe_ebo);
+			gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
+
 			this.draw_calls.push({
 				vao: vao,
 				ebo: ebo,
+				wireframe_ebo: wireframe_ebo,
 				count: geoset.indexCount,
 				visible: true
 			});
@@ -215,13 +236,10 @@ class M3RendererGL {
 
 		// set identity bone matrix for bone 0 (M3 has no skeleton)
 		shader.set_uniform_1i('u_bone_count', 1);
-		const loc = shader.get_uniform_location('u_bone_matrices');
-		if (loc !== null)
-			gl.uniformMatrix4fv(loc, false, IDENTITY_MAT4);
+		const ubo = this.ubos[0];
+		ubo.ubo.upload_range(ubo.offsets[0], 16 * 4);
 
 		// texture matrix defaults
-		shader.set_uniform_1i('u_has_tex_matrix1', 0);
-		shader.set_uniform_1i('u_has_tex_matrix2', 0);
 		shader.set_uniform_mat4('u_tex_matrix1', false, IDENTITY_MAT4);
 		shader.set_uniform_mat4('u_tex_matrix2', false, IDENTITY_MAT4);
 
@@ -271,14 +289,16 @@ class M3RendererGL {
 			if (!dc.visible)
 				continue;
 
+			ubo.ubo.bind(0);
 			dc.vao.bind();
-			gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, dc.ebo);
-			gl.drawElements(
-				wireframe ? gl.LINES : gl.TRIANGLES,
-				dc.count,
-				gl.UNSIGNED_SHORT,
-				0
-			);
+
+			if (wireframe) {
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, dc.wireframe_ebo);
+				gl.drawElements(gl.LINES, dc.count * 2, gl.UNSIGNED_SHORT, 0);
+			} else {
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, dc.ebo);
+				gl.drawElements(gl.TRIANGLES, dc.count, gl.UNSIGNED_SHORT, 0);
+			}
 		}
 
 		ctx.set_cull_face(false);
@@ -287,10 +307,13 @@ class M3RendererGL {
 	_dispose_geometry() {
 		for (const vao of this.vaos)
 			vao.dispose();
+		for (const ubo of this.ubos)
+			ubo.ubo.dispose();
 
 		for (const buf of this.buffers)
 			this.gl.deleteBuffer(buf);
 
+		this.ubos = [];
 		this.vaos = [];
 		this.buffers = [];
 		this.draw_calls = [];

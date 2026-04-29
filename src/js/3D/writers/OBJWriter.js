@@ -19,6 +19,8 @@ class OBJWriter {
 		this.verts = [];
 		this.normals = [];
 		this.uvs = [];
+		this.colors = null;
+		this.flip_uvs = false;
 
 		this.meshes = [];
 		this.name = 'Mesh';
@@ -65,6 +67,14 @@ class OBJWriter {
 	 */
 	addUVArray(uv) {
 		this.uvs.push(uv);
+	}
+
+	/**
+	 * Set the vertex color array (RGBA floats, 4 per vertex).
+	 * @param {Array} colors
+	 */
+	setColorArray(colors) {
+		this.colors = colors;
 	}
 
 	/**
@@ -171,6 +181,15 @@ class OBJWriter {
 			}
 		}
 
+		// Write vertex colors (non-standard, used by wow.export Blender addon).
+		if (this.colors) {
+			const colors = this.colors;
+			for (let i = 0, j = 0, n = colors.length; i < n; j++, i += 4) {
+				if (usedIndices.has(j))
+					await writer.writeLine('vc ' + colors[i] + ' ' + colors[i + 1] + ' ' + colors[i + 2] + ' ' + colors[i + 3]);
+			}
+		}
+
 		// Write UVs
 		const layerCount = this.uvs.length;
 		const hasUV = layerCount > 0;
@@ -191,7 +210,8 @@ class OBJWriter {
 						if (uvIndex === 0)
 							uvMap.set(j, u++);
 
-						await writer.writeLine(prefix + ' ' + uv[i] + ' ' + uv[i + 1]);
+						const v = this.flip_uvs ? (1 - uv[i + 1]) : uv[i + 1];
+						await writer.writeLine(prefix + ' ' + uv[i] + ' ' + v);
 					}
 				}
 			}

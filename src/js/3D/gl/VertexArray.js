@@ -29,6 +29,7 @@ class VertexArray {
 		this.vao = this.gl.createVertexArray();
 		this.vbo = null;
 		this.ebo = null;
+		this.wireframe_ebo = null;
 		this.index_count = 0;
 		this.index_type = this.gl.UNSIGNED_SHORT;
 	}
@@ -77,6 +78,27 @@ class VertexArray {
 	}
 
 	/**
+	 * Create and upload wireframe index buffer (line pairs from triangles).
+	 * Restores the original EBO binding on the active VAO after upload.
+	 * @param {Uint16Array|Uint32Array} data
+	 * @param {number} [usage=gl.STATIC_DRAW]
+	 */
+	set_wireframe_index_buffer(data, usage) {
+		const gl = this.gl;
+		usage = usage ?? gl.STATIC_DRAW;
+
+		if (!this.wireframe_ebo)
+			this.wireframe_ebo = gl.createBuffer();
+
+		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.wireframe_ebo);
+		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, usage);
+
+		// restore triangle EBO in VAO state
+		if (this.ebo)
+			gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ebo);
+	}
+
+	/**
 	 * Set up vertex attribute
 	 * @param {number} location - attribute location
 	 * @param {number} size - number of components (1-4)
@@ -111,12 +133,12 @@ class VertexArray {
 
 	/**
 	 * Set up M2 vertex format
-	 * layout: position(3f) + normal(3f) + bone_indices(4ub) + bone_weights(4ub) + uv1(2f)
-	 * stride = 40 bytes
+	 * layout: position(3f) + normal(3f) + bone_indices(4ub) + bone_weights(4ub) + uv1(2f) + uv2(2f)
+	 * stride = 48 bytes
 	 */
 	setup_m2_vertex_format() {
 		const gl = this.gl;
-		const stride = 40;
+		const stride = 48;
 
 		this.bind();
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
@@ -141,7 +163,9 @@ class VertexArray {
 		gl.enableVertexAttribArray(AttributeLocation.TEXCOORD);
 		gl.vertexAttribPointer(AttributeLocation.TEXCOORD, 2, gl.FLOAT, false, stride, 32);
 
-		// texcoord2 uses separate buffer or not present for simple models
+		// texcoord2: vec2 at offset 40
+		gl.enableVertexAttribArray(AttributeLocation.TEXCOORD2);
+		gl.vertexAttribPointer(AttributeLocation.TEXCOORD2, 2, gl.FLOAT, false, stride, 40);
 	}
 
 	/**
@@ -302,8 +326,30 @@ class VertexArray {
 			gl.deleteBuffer(this.ebo);
 			this.ebo = null;
 		}
+
+		if (this.wireframe_ebo) {
+			gl.deleteBuffer(this.wireframe_ebo);
+			this.wireframe_ebo = null;
+		}
 	}
 }
+
+/**
+ * convert triangle index buffer to line pairs for wireframe rendering.
+ * each triangle [a, b, c] becomes [a, b, b, c, c, a].
+ * @param {Uint16Array|Uint32Array} indices
+ * @returns {Uint16Array|Uint32Array}
+ */
+VertexArray.triangles_to_lines = function(indices) {
+	const lines = new indices.constructor(indices.length * 2);
+	for (let i = 0, j = 0; i < indices.length; i += 3) {
+		const a = indices[i], b = indices[i + 1], c = indices[i + 2];
+		lines[j++] = a; lines[j++] = b;
+		lines[j++] = b; lines[j++] = c;
+		lines[j++] = c; lines[j++] = a;
+	}
+	return lines;
+};
 
 VertexArray.AttributeLocation = AttributeLocation;
 

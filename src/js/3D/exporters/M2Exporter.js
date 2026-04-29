@@ -136,6 +136,7 @@ class M2Exporter {
 			textureIndex++;
 		}
 
+		textureIndex = 0;
 		for (const texture of this.m2.textures) {
 			// Abort if the export has been cancelled.
 			if (helper.isCancelled())
@@ -724,6 +725,7 @@ class M2Exporter {
 		const exportBones = core.view.config.exportM2Bones;
 
 		const obj = new OBJWriter(out);
+		obj.flip_uvs = true;
 		const mtl = new MTLWriter(ExportHelper.replaceExtension(out, '.mtl'));
 
 		const outDir = path.dirname(out);

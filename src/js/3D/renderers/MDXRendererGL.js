@@ -15,6 +15,7 @@ const VertexArray = require('../gl/VertexArray');
 const GLTexture = require('../gl/GLTexture');
 
 const textureRibbon = require('../../ui/texture-ribbon');
+const { create_bones_ubo } = require('./renderer_utils');
 
 const IDENTITY_MAT4 = new Float32Array([
 	1, 0, 0, 0,
@@ -22,6 +23,9 @@ const IDENTITY_MAT4 = new Float32Array([
 	0, 0, 1, 0,
 	0, 0, 0, 1
 ]);
+
+// must match MAX_BONES in m2.vertex.shader
+const MAX_BONES = 256;
 
 // interpolation types
 const INTERP_NONE = 0;
@@ -143,6 +147,7 @@ class MDXRendererGL {
 		this.syncID = -1;
 
 		// rendering
+		this.ubos = [];
 		this.vaos = [];
 		this.textures = new Map();
 		this.default_texture = null;
@@ -155,6 +160,16 @@ class MDXRendererGL {
 		this.current_animation = null;
 		this.animation_time = 0;
 		this.animation_paused = false;
+
+		// pre-allocated scratch matrices for per-frame node calculations
+		this._scratch_local = new Float32Array(16);
+		this._scratch_trans = new Float32Array(16);
+		this._scratch_rot = new Float32Array(16);
+		this._scratch_scale = new Float32Array(16);
+		this._scratch_pivot = new Float32Array(16);
+		this._scratch_neg_pivot = new Float32Array(16);
+		this._scratch_result = new Float32Array(16);
+		this._scratch_calculated = new Set();
 
 		// reactive
 		this.geosetKey = 'modelViewerGeosets';
@@ -244,29 +259,26 @@ class MDXRendererGL {
 		}
 	}
 
+	_create_bones_ubo() {
+		const bone_count = this.nodes ? this.nodes.length : 0;
+		this.node_matrices = create_bones_ubo(this.shader, this.gl, this.ctx, this.ubos, bone_count);
+	}
+
 	_create_skeleton() {
 		const nodes = this.mdx.nodes;
 
 		if (!nodes || nodes.length === 0) {
 			this.nodes = null;
-			this.node_matrices = new Float32Array(16);
 			return;
 		}
 
 		// flatten nodes array (may have gaps)
 		this.nodes = [];
-		let maxId = 0;
 		for (let i = 0; i < nodes.length; i++) {
 			if (nodes[i]) {
 				this.nodes.push(nodes[i]);
-				if (nodes[i].objectId > maxId)
-					maxId = nodes[i].objectId;
 			}
 		}
-
-		this.node_matrices = new Float32Array((maxId + 1) * 16);
-		for (let i = 0; i <= maxId; i++)
-			this.node_matrices.set(IDENTITY_MAT4, i * 16);
 	}
 
 	_build_geometry() {
@@ -275,6 +287,8 @@ class MDXRendererGL {
 
 		if (this.reactive)
 			this.geosetArray = [];
+
+		this._create_bones_ubo();
 
 		for (let g = 0; g < mdx.geosets.length; g++) {
 			const geoset = mdx.geosets[g];
@@ -295,13 +309,7 @@ class MDXRendererGL {
 				normals[i * 3 + 2] = -geoset.normals[i * 3 + 1];
 			}
 
-			// uvs (flip v)
 			const uvs = geoset.tVertices[0] || new Float32Array(vertCount * 2);
-			const flippedUvs = new Float32Array(uvs.length);
-			for (let i = 0; i < vertCount; i++) {
-				flippedUvs[i * 2] = uvs[i * 2];
-				flippedUvs[i * 2 + 1] = 1 - uvs[i * 2 + 1];
-			}
 
 			// create VAO
 			const vao = new VertexArray(this.ctx);
@@ -322,7 +330,7 @@ class MDXRendererGL {
 			// uv buffer
 			const uvo = gl.createBuffer();
 			gl.bindBuffer(gl.ARRAY_BUFFER, uvo);
-			gl.bufferData(gl.ARRAY_BUFFER, flippedUvs, gl.STATIC_DRAW);
+			gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
 			this.buffers.push(uvo);
 
 			// bone index/weight (mdx uses group-based skinning, simplified for now)
@@ -359,11 +367,15 @@ class MDXRendererGL {
 			this.buffers.push(bwbo);
 
 			// index buffer
+			const face_data = new Uint16Array(geoset.faces);
 			const ebo = gl.createBuffer();
 			gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ebo);
-			gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(geoset.faces), gl.STATIC_DRAW);
+			gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, face_data, gl.STATIC_DRAW);
 			this.buffers.push(ebo);
 			vao.ebo = ebo;
+
+			// wireframe index buffer
+			vao.set_wireframe_index_buffer(VertexArray.triangles_to_lines(face_data));
 
 			vao.setup_m2_separate_buffers(vbo, nbo, uvo, bibo, bwbo, null);
 
@@ -415,9 +427,7 @@ class MDXRendererGL {
 		this.animation_paused = false;
 
 		if (this.nodes) {
-			const maxId = (this.node_matrices.length / 16) - 1;
-			for (let i = 0; i <= maxId; i++)
-				this.node_matrices.set(IDENTITY_MAT4, i * 16);
+			this.node_matrices.set(IDENTITY_MAT4);
 		}
 	}
 
@@ -446,15 +456,16 @@ class MDXRendererGL {
 		const frame = this.mdx.sequences[this.current_animation].interval[0] + this.animation_time;
 		const nodes = this.nodes;
 
-		const local_mat = new Float32Array(16);
-		const trans_mat = new Float32Array(16);
-		const rot_mat = new Float32Array(16);
-		const scale_mat = new Float32Array(16);
-		const pivot_mat = new Float32Array(16);
-		const neg_pivot_mat = new Float32Array(16);
-		const temp_result = new Float32Array(16);
+		const local_mat = this._scratch_local;
+		const trans_mat = this._scratch_trans;
+		const rot_mat = this._scratch_rot;
+		const scale_mat = this._scratch_scale;
+		const pivot_mat = this._scratch_pivot;
+		const neg_pivot_mat = this._scratch_neg_pivot;
+		const temp_result = this._scratch_result;
 
-		const calculated = new Set();
+		const calculated = this._scratch_calculated;
+		calculated.clear();
 
 		const calc_node = (node) => {
 			if (!node || calculated.has(node.objectId))
@@ -681,15 +692,13 @@ class MDXRendererGL {
 		shader.set_uniform_1f('u_time', performance.now() * 0.001);
 
 		// bone matrices (mdx uses node-based skeleton)
-		shader.set_uniform_1i('u_bone_count', this.nodes ? this.nodes.length : 0);
+		const ubo = this.ubos[0];
+		const node_count = this.nodes ? this.nodes.length : 0;
+		shader.set_uniform_1i('u_bone_count', node_count);
 		if (this.nodes && this.node_matrices) {
-			const loc = shader.get_uniform_location('u_bone_matrices');
-			if (loc !== null)
-				gl.uniformMatrix4fv(loc, false, this.node_matrices);
+			ubo.ubo.upload_range(ubo.offsets[0], node_count * 16 * 4);
 		}
 
-		shader.set_uniform_1i('u_has_tex_matrix1', 0);
-		shader.set_uniform_1i('u_has_tex_matrix2', 0);
 		shader.set_uniform_mat4('u_tex_matrix1', false, IDENTITY_MAT4);
 		shader.set_uniform_mat4('u_tex_matrix2', false, IDENTITY_MAT4);
 
@@ -746,13 +755,16 @@ class MDXRendererGL {
 			this.default_texture.bind(2);
 			this.default_texture.bind(3);
 
+			ubo.ubo.bind(0);
 			dc.vao.bind();
-			gl.drawElements(
-				wireframe ? gl.LINES : gl.TRIANGLES,
-				dc.count,
-				gl.UNSIGNED_SHORT,
-				dc.start * 2
-			);
+
+			if (wireframe) {
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, dc.vao.wireframe_ebo);
+				gl.drawElements(gl.LINES, dc.count * 2, gl.UNSIGNED_SHORT, dc.start * 4);
+			} else {
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, dc.vao.ebo);
+				gl.drawElements(gl.TRIANGLES, dc.count, gl.UNSIGNED_SHORT, dc.start * 2);
+			}
 		}
 
 		ctx.set_blend(false);
@@ -782,6 +794,8 @@ class MDXRendererGL {
 
 		for (const vao of this.vaos)
 			vao.dispose();
+		for (const ubo of this.ubos)
+			ubo.ubo.dispose();
 
 		for (const buf of this.buffers)
 			this.gl.deleteBuffer(buf);
@@ -797,6 +811,7 @@ class MDXRendererGL {
 		}
 
 		this.vaos = [];
+		this.ubos = [];
 		this.buffers = [];
 		this.draw_calls = [];
 

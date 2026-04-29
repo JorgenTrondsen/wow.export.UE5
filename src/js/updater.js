@@ -60,7 +60,7 @@ const applyUpdate = async () => {
 
 		await core.progressLoadingScreen((i + 1) + ' / ' + n);
 
-		const localPath = path.join(constants.INSTALL_PATH, file);
+		const localPath = path.join(constants.UPDATE.ROOT, file);
 		const node = { file, meta };
 
 		try {
@@ -117,7 +117,7 @@ const applyUpdate = async () => {
 		log.write('Downloading %s to %s', node.file, localFile);
 
 		await core.progressLoadingScreen(util.format('%d / %d (%s)', i + 1, n, downloadSize));
-		await generics.downloadFile(remoteEndpoint, localFile, node.meta.ofs, node.meta.compSize, true);
+		await generics.downloadFile(remoteEndpoint, localFile, node.meta.ofs, node.meta.compSize, true, node.meta.permissions);
 	}
 
 	core.view.loadingTitle = 'Restarting application...';
@@ -130,7 +130,7 @@ const applyUpdate = async () => {
 const launchUpdater = async () => {
 	// On the rare occurrence that we've updated the updater, the updater
 	// cannot update the updater, so instead we update the updater here.
-	const helperApp = path.join(constants.INSTALL_PATH, constants.UPDATE.HELPER);
+	const helperApp = path.join(constants.UPDATE.ROOT, constants.UPDATE.HELPER);
 	const updatedApp = path.join(constants.UPDATE.DIRECTORY, constants.UPDATE.HELPER);
 
 	try {
