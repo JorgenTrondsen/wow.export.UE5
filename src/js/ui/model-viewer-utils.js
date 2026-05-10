@@ -418,7 +418,7 @@ const export_model = async (options) => {
 					exporter.setDoodadSetMask(wmo_set_mask);
 
 				if (format === 'OBJ') {
-					await exporter.exportAsOBJ(final_export_path, helper, file_manifest, core.view.config.modelsExportSplitWMOGroups);
+					await exporter.exportAsOBJ(final_export_path, helper, file_manifest, core.view.config.modelsExportSplitWMOGroups, core.view.config.modelsExportCollision);
 					await export_paths?.writeLine('WMO_OBJ:' + final_export_path);
 				} else if (format === 'STL') {
 					await exporter.exportAsSTL(final_export_path, helper, file_manifest);

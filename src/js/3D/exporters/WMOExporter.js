@@ -354,7 +354,7 @@ class WMOExporter {
 	 * @param {ExportHelper} helper
 	 * @param {Array} fileManifest
 	 */
-	async exportAsOBJ(out, helper, fileManifest, split_groups = false) {
+	async exportAsOBJ(out, helper, fileManifest, split_groups = false, exportCollision = false) {
 		if (split_groups) {
 			await this.exportGroupsAsSeparateOBJ(out, helper, fileManifest);
 			return;
@@ -748,6 +748,75 @@ class WMOExporter {
 			await json.write(config.overwriteFiles);
 			fileManifest?.push({ type: 'META', fileDataID: this.wmo.fileDataID, file: json.out });
 		}
+
+		if (exportCollision)
+			await this.exportCollisionOBJ(out, helper, fileManifest);
+	}
+
+	/**
+	 * Dedicated method to export WMO collision geometry.
+	 */
+	async exportCollisionOBJ(out, helper, fileManifest) {
+		const physPath = ExportHelper.replaceExtension(out, '.phys.obj');
+		const obj = new OBJWriter(physPath);
+		obj.setName(path.basename(physPath, '.obj'));
+
+		await this.wmo.load();
+		const groups = [];
+		let totalIndicesCount = 0;
+
+		// 1. Collect valid groups and calculate size
+		for (let i = 0; i < this.wmo.groupCount; i++) {
+			const group = await this.wmo.getGroup(i);
+			if (!group.vertices) continue;
+			if (this.groupMask) {
+				const maskEntry = this.groupMask.find(m => m.groupIndex === i);
+				if (maskEntry && !maskEntry.checked) continue;
+			}
+			groups.push(group);
+			totalIndicesCount += group.vertices.length / 3;
+		}
+
+		const vertsArray = new Array(totalIndicesCount * 3);
+		let vertOffset = 0;
+
+		// 2. Process groups
+		for (const group of groups) {
+			const groupVertCount = group.vertices.length / 3;
+			
+			// Copy vertices
+			for (let i = 0; i < group.vertices.length; i++) {
+				vertsArray[vertOffset * 3 + i] = group.vertices[i];
+			}
+
+			const collisionIndices = [];
+			// 3. Filter faces by MOPY flags
+			// Flag 0x04 = No Collision. We want triangles where (flags & 0x04) === 0.
+			for (let fI = 0; fI < group.materialInfo.length; fI++) {
+				const faceInfo = group.materialInfo[fI];
+				const hasCollision = (faceInfo.flags & 0x04) === 0;
+
+				if (hasCollision) {
+					// Each face consists of 3 indices in the MOVI chunk
+					collisionIndices.push(
+						group.indices[fI * 3] + vertOffset,
+						group.indices[fI * 3 + 1] + vertOffset,
+						group.indices[fI * 3 + 2] + vertOffset
+					);
+				}
+			}
+
+			if (collisionIndices.length > 0) {
+				const groupName = this.wmo.groupNames[group.nameOfs] || `Group_${group.groupID}`;
+				obj.addMesh(groupName + '_collision', collisionIndices);
+			}
+
+			vertOffset += groupVertCount;
+		}
+
+		obj.setVertArray(vertsArray);
+		await obj.write(core.view.config.overwriteFiles);
+		fileManifest?.push({ type: 'PHYS_OBJ', fileDataID: this.wmo.fileDataID, file: obj.out });
 	}
 
 	/**
